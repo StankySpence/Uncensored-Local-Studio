@@ -1,12 +1,21 @@
 <div align="center">
 
-#  Local AI Image Generator
+# 🖼️ Local AI Image Generator
 
 ### A fully self-contained, offline-first AI Art Studio for Windows
 
+[![Platform: Windows](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows&logoColor=white&style=for-the-badge)](https://github.com)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge)](LICENSE)
+[![Build: v1.0.0](https://img.shields.io/badge/Release-v1.0.0-success?style=for-the-badge)](https://github.com)
+[![Engine: stable--diffusion.cpp](https://img.shields.io/badge/Engine-stable--diffusion.cpp-orange?style=for-the-badge)](https://github.com/leejet/stable-diffusion.cpp)
 
+---
 
+[🚀 Quick Start](#-quick-start) • [✨ Features](#-features) • [📸 Screenshots](#-screenshots) • [📂 Project Structure](#-project-structure) • [📦 Adding Models](#-adding-models-required) • [🛠️ Troubleshooting](#%EF%B8%8F-troubleshooting)
 
+---
+
+<img src="assets/dashboard.png" alt="Local AI Studio Dashboard" width="100%" style="border-radius: 8px;">
 
 </div>
 
@@ -42,35 +51,47 @@ Open **`http://localhost:1420`** in your default web browser, select your model,
 <table>
   <tr>
     <td width="50%">
-      <h3> 100% Offline & Private</h3>
+      <h3>🔒 100% Offline & Private</h3>
       <p>All inference runs entirely on your local GPU/CPU. Your prompts, images, and data never leave your computer.</p>
     </td>
     <td width="50%">
-      <h3> Auto-Detected GPU Acceleration</h3>
+      <h3>🚀 Auto-Detected GPU Acceleration</h3>
       <p>Seamlessly detects and configures **CUDA** for Nvidia cards, or falls back to the high-performance **Vulkan** engine for AMD & Intel Arc GPUs.</p>
     </td>
   </tr>
   <tr>
     <td width="50%">
-      <h3> No Global Dependencies</h3>
+      <h3>📦 No Global Dependencies</h3>
       <p>Zero system footprint. Node.js is downloaded as a portable binary into a sandbox folder, leaving your environment paths untouched.</p>
     </td>
     <td width="50%">
-      <h3> Dynamic Backend Controller</h3>
+      <h3>🎛️ Dynamic Backend Controller</h3>
       <p>A native Node.js process manager hosts the React frontend, streams system telemetry, manages downloads, and handles inference server lifecycles.</p>
     </td>
   </tr>
   <tr>
     <td width="50%">
-      <h3> Real-time Hardware Telemetry</h3>
+      <h3>📊 Real-time Hardware Telemetry</h3>
       <p>Monitor your PC's real-time CPU, RAM, GPU, and VRAM utilization directly inside the workspace UI.</p>
     </td>
     <td width="50%">
-      <h3> Drag & Drop Model Importing</h3>
+      <h3>📁 Drag & Drop Model Importing</h3>
       <p>Upload local model files from other folders on your PC or download weights directly from Hugging Face via the built-in UI downloader.</p>
     </td>
   </tr>
 </table>
+
+---
+
+## 📸 Screenshots
+
+### Model Library Manager
+Allows downloading recommended weights or importing custom files directly through the UI.
+<img src="assets/models.png" alt="Model Library Screen" width="100%" style="border-radius: 8px; margin-bottom: 20px;">
+
+### Inference & Hardware Constraints
+Adjust parameters, resolution aspect-ratios, and hardware backend options in one place.
+<img src="assets/settings.png" alt="Image Constraints Settings" width="100%" style="border-radius: 8px;">
 
 ---
 
@@ -79,6 +100,7 @@ Open **`http://localhost:1420`** in your default web browser, select your model,
 ```
 local-ai-image-generator/
 ├── start.bat                  # main double-click launcher
+├── LICENSE                    # MIT Open Source license
 ├── .gitignore
 ├── README.md                  
 │
@@ -100,6 +122,33 @@ local-ai-image-generator/
 
 ---
 
+## 📦 First-Run Setup Stages
+
+When launching for the first time, `scripts/setup.ps1` runs automatically in your console window through 4 stages:
+
+```mermaid
+graph TD
+    A[Launch start.bat] --> B[Stage 1: Setup Portable Node.js]
+    B --> C[Stage 2: Scan GPU & Download CUDA / Vulkan Binary]
+    C --> D[Stage 3: Install Frontend NPM Dependencies]
+    D --> E[Stage 4: Compile React UI into dist/]
+    E --> F[Open Browser: localhost:1420]
+```
+
+---
+
+## 📥 Adding Models (Required)
+
+> [!IMPORTANT]
+> **This repository does not ship with pre-downloaded AI weights** due to their large file sizes (2 GB to 12 GB+). The `app/models/` folder will be empty on your first start. You must add at least one model before generating.
+
+You can import weights using **three simple options**:
+
+1. **Curated Library:** Navigate to the **Model Manager** tab in the dashboard and click **Download** next to any of our pre-configured models (e.g. *DreamShaper 8* for SD 1.5 speed, or *Juggernaut XL* for SDXL realism).
+2. **Download URL:** Paste any direct download link to a GGUF/Safetensors weights file (e.g. from Civitai or Hugging Face) into the Model Manager URL box.
+3. **Manual Import:** Move your existing `.safetensors`, `.gguf`, or `.ckpt` weights files directly into the `app/models/` directory.
+
+---
 
 ## 🖥️ GPU Compatibility Matrix
 
