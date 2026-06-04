@@ -68,8 +68,9 @@ local-ai-image-generator/
 
 Typical generation times for an image with **20 steps** (e.g. 512x512 resolution):
 
-*   **CUDA GPU (Nvidia):** ~10 seconds.
-*   **Vulkan GPU (AMD / Intel Arc / GTX fallback):** ~89 seconds.
+*   **CUDA GPU (Nvidia RTX):** ~10 seconds.
+*   **Vulkan GPU (AMD / Intel Arc):** ~89 seconds.
+*   **GTX Vulkan Fallback (Nvidia GTX):** ~30 seconds (Vulkan runs significantly faster on legacy GTX series cards since they lack Tensor Cores).
 *   **CPU (Fallback):** ~150 - 300+ seconds (highly dependent on processor core count, speed, and AVX instruction sets).
 
 ---
