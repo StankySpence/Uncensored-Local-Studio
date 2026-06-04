@@ -134,4 +134,6 @@ Ensure no other applications or development services are binding to these ports 
 
 ## 📝 License
 
-This project bundles [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) under the MIT License. Individual model weights are subject to their respective licenses — please check model cards on Hugging Face or Civitai before commercial application.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+It bundles [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) which is also licensed under the MIT License. Model weights are subject to their own respective licenses — please check model cards on Hugging Face or Civitai before commercial application.
