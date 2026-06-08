@@ -1197,7 +1197,11 @@ function getModelLoadIssue(modelPath) {
   }
 
   if (ext === ".gguf") {
+    const knownDiffusionOnlyGguf =
+      lower === "stable-diffusion-xl-base-1.0-q4_0.gguf" ||
+      lower.includes("stable-diffusion-xl-base-1.0");
     const requiresSeparateComponents =
+      knownDiffusionOnlyGguf ||
       lower.includes("z_image") ||
       lower.includes("z-image") ||
       lower.includes("zimage") ||
@@ -1208,6 +1212,9 @@ function getModelLoadIssue(modelPath) {
       lower.includes("flux");
 
     if (requiresSeparateComponents) {
+      if (knownDiffusionOnlyGguf) {
+        return `${filename} is not supported as a one-click model in this app. This SDXL GGUF is a diffusion-only component and needs matching VAE/text encoder files instead of being loaded with --model. Use one of the recommended Safetensors SDXL/SD 1.5 checkpoints, or import a complete single-file GGUF checkpoint.`;
+      }
       return `${filename} looks like a multi-file diffusion GGUF. This app currently loads single-file SD 1.5/SDXL checkpoints directly. Models like Z-Image, Qwen, Flux, HiDream, Hunyuan, and Wan usually need extra files such as VAE/text encoders and must be launched with --diffusion-model instead of --model.`;
     }
   }
@@ -1227,6 +1234,9 @@ function describeBackendError(rawError, modelPath) {
   if (!raw.includes("new_sd_ctx_t failed")) return raw;
 
   if (lower.endsWith(".gguf")) {
+    if (lower === "stable-diffusion-xl-base-1.0-q4_0.gguf" || lower.includes("stable-diffusion-xl-base-1.0")) {
+      return `${raw}\n\n${filename} is not supported as a one-click model in this app. This SDXL GGUF is a diffusion-only component and needs matching VAE/text encoder files instead of being loaded with --model. Use one of the recommended Safetensors SDXL/SD 1.5 checkpoints, or import a complete single-file GGUF checkpoint.`;
+    }
     return `${raw}\n\n${filename} could not be loaded as a single checkpoint. Some GGUF files are only the diffusion part of a larger workflow and need separate VAE/text encoder files. Try a recommended SD 1.5/SDXL model, or re-download/import the file if this is meant to be a single-file SD/SDXL GGUF.`;
   }
 

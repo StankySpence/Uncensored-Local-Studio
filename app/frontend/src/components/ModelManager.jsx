@@ -24,15 +24,6 @@ const MODEL_LIBRARY = [
         notes: "All-around SDXL model for fantasy art, renders, illustration, and stylized images.",
         url: "https://huggingface.co/Lykon/dreamshaper-xl-lightning/resolve/main/DreamShaperXL_Lightning.safetensors",
       },
-      {
-        name: "SDXL Base 1.0 Q4_0 GGUF",
-        filename: "stable-diffusion-xl-base-1.0-Q4_0.gguf",
-        format: "GGUF",
-        approxSize: "3.8 GB",
-        resolution: "1024x1024",
-        notes: "Quantized SDXL base model for lower VRAM or CPU-friendly generation.",
-        url: "https://huggingface.co/hum-ma/SDXL-models-GGUF/resolve/7e15380138e7069ca3aaef5bf0401c3406e3a593/stable-diffusion-xl-base-1.0-Q4_0.gguf",
-      },
     ],
   },
   {
@@ -709,6 +700,21 @@ function ModelManager({ activeModel, setActiveModel, serverRunning, setServerRun
                       {installed ? <HardDrive size={14} /> : downloading ? <RefreshCw className="progress-spinner" size={14} /> : <DownloadCloud size={14} />}
                       <span>{installed ? "Downloaded" : downloading ? "Downloading" : "Download"}</span>
                     </button>
+                    <a
+                      href={model.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{
+                        alignSelf: "center",
+                        color: "var(--md-sys-color-primary)",
+                        fontSize: "0.75rem",
+                        fontWeight: 600,
+                        lineHeight: 1.2,
+                        textDecoration: "none",
+                      }}
+                    >
+                      Save to Downloads folder
+                    </a>
                   </div>
                 );
               })}
