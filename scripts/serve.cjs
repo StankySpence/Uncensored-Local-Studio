@@ -28,10 +28,10 @@ const BACKEND_PATHS = {
   cuda: path.join(ROOT, "app", "backend", "win", "cuda", "sd-cuda.exe"),
   vulkan: path.join(ROOT, "app", "backend", "win", "vulkan", "sd-vulkan.exe"),
   mac: path.join(ROOT, "app", "backend", "mac", "sd"),
-  linuxCpu: path.join(ROOT, "app", "backend", "linux", "cpu", "sd-cpu"),
-  linuxVulkan: path.join(ROOT, "app", "backend", "linux", "vulkan", "sd-vulkan"),
-  linuxRocm: path.join(ROOT, "app", "backend", "linux", "rocm", "sd-rocm"),
-  linuxCuda: path.join(ROOT, "app", "backend", "linux", "cuda", "sd-cuda"),
+  linuxCpu: path.join(ROOT, "app", "backend", "linux", "cpu", "sd-server-cpu"),
+  linuxVulkan: path.join(ROOT, "app", "backend", "linux", "vulkan", "sd-server-vulkan"),
+  linuxRocm: path.join(ROOT, "app", "backend", "linux", "rocm", "sd-server-rocm"),
+  linuxCuda: path.join(ROOT, "app", "backend", "linux", "cuda", "sd-server-cuda"),
 };
 let BACKEND_PATH = "";
 const backendSupportsFlags = {};
@@ -187,6 +187,21 @@ function getGpuInfo() {
       cachedGpuInfo = linuxGpu;
       return cachedGpuInfo;
     }
+  }
+
+  if (osPlatform === "darwin") {
+    try {
+      const output = execSync(
+        "system_profiler SPDisplaysDataType | awk -F': ' '/Chipset Model|Vendor/ {print $2; exit}'",
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+      ).trim();
+      if (output) {
+        cachedGpuInfo = { name: output };
+        return cachedGpuInfo;
+      }
+    } catch (_) {}
+    cachedGpuInfo = { name: "Apple Metal GPU" };
+    return cachedGpuInfo;
   }
 
   cachedGpuInfo = { name: "Unavailable" };
@@ -589,8 +604,14 @@ function getBackendOptions() {
   const rocmInstalled = osPlatform === "linux" && fs.existsSync(BACKEND_PATHS.linuxRocm);
   const rocmAvailable = rocmInstalled && hasAmdGpu() && backendAccepts(BACKEND_PATHS.linuxRocm, "rocm");
   const cpuInstalled = osPlatform === "linux" && fs.existsSync(BACKEND_PATHS.linuxCpu);
+  const metalInstalled = osPlatform === "darwin" && fs.existsSync(BACKEND_PATHS.mac);
+  // Darwin release binaries are Metal builds. Treat an installed macOS backend
+  // as Metal-capable so the UI does not default to CPU if a probe flag changes
+  // upstream.
+  const metalAvailable = metalInstalled;
 
   const options = [{ id: "cpu", label: "CPU", available: true }];
+  if (metalAvailable) options.push({ id: "metal", label: "Metal GPU", available: true });
   if (vulkanAvailable) options.push({ id: "vulkan", label: "Vulkan GPU", available: true });
   if (rocmAvailable) options.push({ id: "rocm", label: "ROCm GPU (AMD)", available: true });
   if (cudaAvailable) options.push({ id: "cuda", label: "CUDA GPU", available: true });
@@ -605,9 +626,14 @@ function getBackendOptions() {
   if (rocmInstalled && !rocmAvailable) {
     unavailable.push({ id: "rocm", label: "ROCm GPU (AMD)", reason: "Installed, but ROCm backend validation failed." });
   }
+  if (metalInstalled && !metalAvailable) {
+    unavailable.push({ id: "metal", label: "Metal GPU", reason: "Installed, but Metal backend validation failed." });
+  }
 
   let defaultBackend = "cpu";
-  if (cudaAvailable) {
+  if (metalAvailable) {
+    defaultBackend = "metal";
+  } else if (cudaAvailable) {
     const gpuName = String(getGpuInfo().name).toLowerCase();
     const isGtxCard = gpuName.includes("gtx");
     if (isGtxCard && vulkanAvailable) {
@@ -627,6 +653,7 @@ function getBackendOptions() {
     cudaAvailable,
     vulkanAvailable,
     rocmAvailable,
+    metalAvailable,
     defaultBackendType: defaultBackend,
   };
   return cachedBackendOptions;
@@ -635,17 +662,22 @@ function getBackendOptions() {
 function backendAccepts(binaryPath, backendName) {
   if (!binaryPath || !fs.existsSync(binaryPath)) return false;
   try {
+    const cliBackendName = backendName === "metal" ? "metal0" : backendName;
     const probeArgs = [
-      "--backend", backendName,
-      "--params-backend", backendName,
+      "--backend", cliBackendName,
+      "--params-backend", cliBackendName,
       "--model", path.join(MODELS, "__backend_probe_missing__.safetensors"),
       "--listen-port", "18082",
     ];
     const spawnEnv = { ...process.env };
     if (osPlatform === "linux") {
-      const extraLibs = [path.dirname(binaryPath)];
+      const dir = path.dirname(binaryPath);
       const existing = spawnEnv.LD_LIBRARY_PATH || "";
-      spawnEnv.LD_LIBRARY_PATH = extraLibs.join(":") + (existing ? ":" + existing : "");
+      spawnEnv.LD_LIBRARY_PATH = dir + (existing ? ":" + existing : "");
+    } else if (osPlatform === "darwin") {
+      const dir = path.dirname(binaryPath);
+      const existing = spawnEnv.DYLD_LIBRARY_PATH || "";
+      spawnEnv.DYLD_LIBRARY_PATH = dir + (existing ? ":" + existing : "");
     }
     let result = spawnSync(binaryPath, probeArgs, { env: spawnEnv, encoding: "utf8", timeout: 5000 });
     let output = `${result.stdout || ""}\n${result.stderr || ""}`;
@@ -664,7 +696,7 @@ function backendAccepts(binaryPath, backendName) {
     }
 
     const lower = output.toLowerCase();
-    if (lower.includes("backend config failed") || output.includes(`backend '${backendName}' was not found`)) {
+    if (lower.includes("backend config failed") || output.includes(`backend '${backendName}' was not found`) || output.includes(`backend '${cliBackendName}' was not found`)) {
       return false;
     }
     // Reject binaries that fail at the dynamic linker / glibc level.
@@ -704,7 +736,11 @@ function selectBackendPath(useGpu, backendType = "auto") {
     if (fs.existsSync(BACKEND_PATHS.linuxCpu)) return BACKEND_PATHS.linuxCpu;
     return BACKEND_PATH;
   }
-  // macOS fallback
+  if (osPlatform === "darwin") {
+    if (fs.existsSync(BACKEND_PATHS.mac)) return BACKEND_PATHS.mac;
+    return BACKEND_PATH;
+  }
+  // generic fallback
   if (fs.existsSync(BACKEND_PATHS.mac)) return BACKEND_PATHS.mac;
   return BACKEND_PATH;
 }
@@ -722,6 +758,7 @@ function getBackendMode(backendPath, useGpu, backendType = "auto") {
   if (name.includes("cuda")) return "CUDA GPU";
   if (name.includes("rocm")) return "ROCm GPU";
   if (name.includes("vulkan")) return "Vulkan GPU";
+  if (osPlatform === "darwin" || backendType === "metal") return "Metal GPU";
   return "GPU";
 }
 
@@ -887,6 +924,11 @@ async function startBackend(settings = {}) {
       args.push("--backend", "rocm0", "--params-backend", "rocm0");
     }
     args.push("--rng", "cpu", "--sampler-rng", "cpu");
+  } else if (requestedBackend === "metal") {
+    if (supportsFlags) {
+      args.push("--backend", "metal0", "--params-backend", "metal0");
+    }
+    args.push("--rng", "cpu", "--sampler-rng", "cpu");
   }
 
   if (currentSettings.vaeTiling) {
@@ -914,6 +956,10 @@ async function startBackend(settings = {}) {
       const existing = spawnEnv.LD_LIBRARY_PATH || "";
       spawnEnv.LD_LIBRARY_PATH = extraLibs.join(":") + (existing ? ":" + existing : "");
     }
+  } else if (osPlatform === "darwin") {
+    const existing = spawnEnv.DYLD_LIBRARY_PATH || "";
+    const backendDir = path.dirname(BACKEND_PATHS.mac);
+    spawnEnv.DYLD_LIBRARY_PATH = backendDir + (existing ? ":" + existing : "");
   }
 
   console.log("  [backend] Starting:", path.basename(backendPath), args.join(" "));
@@ -1008,6 +1054,11 @@ async function startBackend(settings = {}) {
       backendLoadState.device = deviceMatch[1].trim();
       currentSettings.backendDevice = backendLoadState.device;
     }
+    const metalDeviceMatch = cleanOutput.match(/GPU name:\s*([^\r\n]+)/);
+    if (metalDeviceMatch) {
+      backendLoadState.device = metalDeviceMatch[1].trim();
+      currentSettings.backendDevice = backendLoadState.device;
+    }
     if (cleanOutput.includes("ggml_cuda_init")) {
       backendLoadState.backendMode = "CUDA GPU";
       currentSettings.backendMode = "CUDA GPU";
@@ -1019,6 +1070,10 @@ async function startBackend(settings = {}) {
     if (cleanOutput.includes("ggml_hip") || cleanOutput.includes("ggml_rocm")) {
       backendLoadState.backendMode = "ROCm GPU";
       currentSettings.backendMode = "ROCm GPU";
+    }
+    if (cleanOutput.includes("ggml_metal")) {
+      backendLoadState.backendMode = "Metal GPU";
+      currentSettings.backendMode = "Metal GPU";
     }
     if (cleanOutput.includes("[ERROR]")) {
       const nextError = describeBackendError(cleanOutput.trim(), currentSettings.model);
@@ -1035,7 +1090,7 @@ async function startBackend(settings = {}) {
     console.log("  [backend] exited with code", code);
     if (code !== null && code !== 0) {
       if (!backendError) {
-        backendError = `exited with code ${code}`;
+        backendError = describeBackendExitCode(code, currentSettings.backendBinary || BACKEND_PATH);
       }
     }
     backendLoadState.active = false;
@@ -1388,6 +1443,30 @@ function describeBackendError(rawError, modelPath) {
   }
 
   return `${raw}\n\nThe backend could not create the model context. Common causes are a corrupt/incomplete model file, unsupported checkpoint type, or not enough free RAM/VRAM. Delete and re-download the model, then try CPU or Vulkan mode at 512x512.`;
+}
+
+function describeBackendExitCode(code, backendPath) {
+  const numericCode = Number(code);
+  if (osPlatform === "win32" && numericCode === 3221225781) {
+    const backendName = path.basename(backendPath || BACKEND_PATH || "backend");
+    const lowerBackend = backendName.toLowerCase();
+    const isVulkan = lowerBackend.includes("vulkan");
+    const isCuda = lowerBackend.includes("cuda");
+    const likelyMissing = isVulkan
+      ? "the Vulkan runtime/driver DLL, such as vulkan-1.dll"
+      : isCuda
+        ? "a CUDA runtime DLL or NVIDIA driver component"
+        : "a required backend DLL";
+    const driverHint = isVulkan
+      ? "Install or update the GPU vendor driver with Vulkan support, then run setup again so the Vulkan backend folder is repaired."
+      : isCuda
+        ? "Install or update the NVIDIA driver, then run setup again so the CUDA backend folder is repaired."
+        : "Update the GPU driver, then run setup again so the backend folder is repaired.";
+
+    return `exited with code ${code} (0xC0000135: required DLL not found).\n\nWindows could not start ${backendName} because ${likelyMissing} is missing or not loadable. ${driverHint}\n\nIf you are using an AMD/Intel GPU, update the AMD/Intel graphics driver first. If the GPU is too old for the current Vulkan backend, switch the backend to CPU.`;
+  }
+
+  return `exited with code ${code}`;
 }
 
 function getModelInfo(filename) {
@@ -1830,7 +1909,7 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-server.listen(PORT_FRONTEND, "127.0.0.1", () => {
+server.listen(PORT_FRONTEND, "0.0.0.0", () => {
   console.log("");
   console.log("  ============================================================");
   console.log("   LOCAL AI IMAGE GENERATOR  |  Running");

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Local AI Image Generator - Linux Setup Script
+# Local AI Image Generator - Linux/macOS Setup Script
 # Self-contained: no apt/yum/pacman, no global Node.js install.
 #
 
@@ -11,18 +11,40 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 APP_DIR="$ROOT_DIR/app"
 FRONTEND_DIR="$APP_DIR/frontend"
 TOOLS_DIR="$APP_DIR/tools"
-NODE_DIR="$TOOLS_DIR/node-linux"
+DIST_DIR="$APP_DIR/dist"
+PLATFORM="$(uname -s)"
+ARCH="$(uname -m)"
+
+if [[ "$PLATFORM" == "Darwin" ]]; then
+  PLATFORM_LABEL="macOS"
+  NODE_DIR="$TOOLS_DIR/node-mac"
+  BACKEND_DIR="$APP_DIR/backend/mac"
+else
+  PLATFORM_LABEL="Linux"
+  NODE_DIR="$TOOLS_DIR/node-linux"
+  BACKEND_DIR="$APP_DIR/backend/linux"
+fi
+
 NODE_BIN="$NODE_DIR/bin/node"
 NPM_BIN="$NODE_DIR/bin/npm"
-DIST_DIR="$APP_DIR/dist"
-BACKEND_DIR="$APP_DIR/backend/linux"
 
 # Release pins
 SD_RELEASE="master-685-19bdfe2"
 SD_SHORT_HASH="${SD_RELEASE##*-}"
 SD_BASE_URL="https://github.com/leejet/stable-diffusion.cpp/releases/download/$SD_RELEASE"
 NODE_VERSION="22.12.0"
-NODE_TARBALL="node-v${NODE_VERSION}-linux-x64.tar.xz"
+
+if [[ "$PLATFORM" == "Darwin" ]]; then
+  if [[ "$ARCH" == "arm64" ]]; then
+    NODE_PLATFORM_ARCH="darwin-arm64"
+  else
+    NODE_PLATFORM_ARCH="darwin-x64"
+  fi
+  NODE_TARBALL="node-v${NODE_VERSION}-${NODE_PLATFORM_ARCH}.tar.gz"
+else
+  NODE_PLATFORM_ARCH="linux-x64"
+  NODE_TARBALL="node-v${NODE_VERSION}-${NODE_PLATFORM_ARCH}.tar.xz"
+fi
 NODE_URL="https://nodejs.org/dist/v${NODE_VERSION}/$NODE_TARBALL"
 
 # Flags
@@ -36,7 +58,7 @@ print_header() {
   clear 2>/dev/null || true
   echo ""
   echo "  ============================================================"
-  echo "   LOCAL AI IMAGE GENERATOR  -  Linux First-Time Setup"
+  echo "   LOCAL AI IMAGE GENERATOR  -  $PLATFORM_LABEL First-Time Setup"
   echo "   100% Self-Contained  |  No System Install Required"
   echo "  ============================================================"
   echo ""
@@ -180,15 +202,39 @@ copy_binaries_from_extracted() {
   find "$extracted_dir" -type f -name "*.so" -exec cp {} "$dest_dir/" \; 2>/dev/null || true
 }
 
+copy_macos_backend_from_extracted() {
+  local extracted_dir="$1" dest_dir="$2"
+  local target="$dest_dir/sd"
+  local server_bin=""
+  local cli_bin=""
+
+  server_bin="$(find "$extracted_dir" -type f -name "sd-server" | head -n 1)"
+  cli_bin="$(find "$extracted_dir" -type f \( -name "sd" -o -name "sd-cli" \) | head -n 1)"
+
+  if [[ -n "$server_bin" ]]; then
+    cp "$server_bin" "$target"
+  elif [[ -n "$cli_bin" ]]; then
+    cp "$cli_bin" "$target"
+  else
+    print_fail "No sd-server, sd, or sd-cli binary was found in the macOS backend archive."
+    return 1
+  fi
+
+  find "$extracted_dir" -type f \( -name "*.dylib" -o -name "*.metallib" \) -exec cp {} "$dest_dir/" \; 2>/dev/null || true
+  chmod +x "$target" 2>/dev/null || true
+}
+
 # ════════════════════════════════════════════════════════════════════════════
 print_header
 
-check_glibc
+if [[ "$PLATFORM" == "Linux" ]]; then
+  check_glibc
+fi
 
 TOTAL_STEPS=4
 
 # ── Step 1: Portable Node.js ────────────────────────────────────────────────
-print_step 1 $TOTAL_STEPS "Setting up portable Node.js (app/tools/node-linux/)"
+print_step 1 $TOTAL_STEPS "Setting up portable Node.js ($NODE_DIR/)"
 
 if [[ -x "$NODE_BIN" && -x "$NPM_BIN" ]]; then
   VERSION=$("$NODE_BIN" --version)
@@ -201,7 +247,7 @@ else
   extract_tarxz "$NODE_TAR_PATH" "$TOOLS_DIR" "Node.js"
   rm -f "$NODE_TAR_PATH"
 
-  EXTRACTED_DIR="$(find "$TOOLS_DIR" -maxdepth 1 -type d -name 'node-v*-linux-x64' | head -n 1)"
+  EXTRACTED_DIR="$(find "$TOOLS_DIR" -maxdepth 1 -type d -name "node-v*-${NODE_PLATFORM_ARCH}" | head -n 1)"
   if [[ -d "$EXTRACTED_DIR" ]]; then
     rm -rf "$NODE_DIR"
     mv "$EXTRACTED_DIR" "$NODE_DIR"
@@ -217,14 +263,35 @@ else
 fi
 
 # ── Step 2: stable-diffusion.cpp Backends ───────────────────────────────────
-VENDOR="$(detect_gpu_vendor)"
-print_step 2 $TOTAL_STEPS "Detecting GPU vendor: ${VENDOR:-none}"
-
 mkdir -p "$BACKEND_DIR"
+
+if [[ "$PLATFORM" == "Darwin" ]]; then
+  print_step 2 $TOTAL_STEPS "Setting up stable-diffusion.cpp Metal backend (app/backend/mac/)"
+  if [[ "$ARCH" != "arm64" ]]; then
+    print_fail "The official macOS backend binary is Apple Silicon only (arm64)."
+    print_info "Intel Macs need a local source build with Metal/OpenBLAS and a matching app/backend/mac/sd binary."
+    exit 1
+  fi
+
+  MAC_BACKEND="$BACKEND_DIR/sd"
+  if [[ -x "$MAC_BACKEND" ]]; then
+    print_ok "macOS Metal backend already ready."
+  else
+    MAC_ZIP="$TOOLS_DIR/sd-mac-metal.zip"
+    download_file "$SD_BASE_URL/sd-master-${SD_SHORT_HASH}-bin-Darwin-macOS-15.7.7-arm64.zip" "$MAC_ZIP" "stable-diffusion.cpp Metal Backend (macOS arm64)"
+    extract_zip "$MAC_ZIP" "$BACKEND_DIR/extracted" "macOS Metal Backend"
+    rm -f "$MAC_ZIP"
+    copy_macos_backend_from_extracted "$BACKEND_DIR/extracted" "$BACKEND_DIR"
+    rm -rf "$BACKEND_DIR/extracted"
+    print_ok "macOS Metal backend installed."
+  fi
+else
+  VENDOR="$(detect_gpu_vendor)"
+  print_step 2 $TOTAL_STEPS "Detecting GPU vendor: ${VENDOR:-none}"
 
 # CPU backend (always)
 CPU_BACKEND_DIR="$BACKEND_DIR/cpu"
-if [[ ! -f "$CPU_BACKEND_DIR/sd-cpu" ]]; then
+if [[ ! -f "$CPU_BACKEND_DIR/sd-cpu" || ! -f "$CPU_BACKEND_DIR/sd-server-cpu" ]]; then
   mkdir -p "$CPU_BACKEND_DIR"
   CPU_ZIP="$TOOLS_DIR/sd-cpu.zip"
   download_file "$SD_BASE_URL/sd-master-${SD_SHORT_HASH}-bin-Linux-Ubuntu-24.04-x86_64.zip" "$CPU_ZIP" "stable-diffusion.cpp CPU Backend (Linux x86_64)"
@@ -232,15 +299,15 @@ if [[ ! -f "$CPU_BACKEND_DIR/sd-cpu" ]]; then
   rm -f "$CPU_ZIP"
   copy_binaries_from_extracted "$CPU_BACKEND_DIR/extracted" "$CPU_BACKEND_DIR" "sd-cpu" "sd-server-cpu"
   rm -rf "$CPU_BACKEND_DIR/extracted"
-  chmod +x "$CPU_BACKEND_DIR/sd-cpu" 2>/dev/null || true
   print_ok "CPU backend installed."
 else
   print_ok "CPU backend already ready."
 fi
+chmod +x "$CPU_BACKEND_DIR/sd-cpu" "$CPU_BACKEND_DIR/sd-server-cpu" 2>/dev/null || true
 
 # Vulkan backend (always - cross-vendor GPU fallback)
 VULKAN_BACKEND_DIR="$BACKEND_DIR/vulkan"
-if [[ ! -f "$VULKAN_BACKEND_DIR/sd-vulkan" ]]; then
+if [[ ! -f "$VULKAN_BACKEND_DIR/sd-vulkan" || ! -f "$VULKAN_BACKEND_DIR/sd-server-vulkan" ]]; then
   mkdir -p "$VULKAN_BACKEND_DIR"
   VULKAN_ZIP="$TOOLS_DIR/sd-vulkan.zip"
   download_file "$SD_BASE_URL/sd-master-${SD_SHORT_HASH}-bin-Linux-Ubuntu-24.04-x86_64-vulkan.zip" "$VULKAN_ZIP" "stable-diffusion.cpp Vulkan Backend (Linux x86_64)"
@@ -248,16 +315,16 @@ if [[ ! -f "$VULKAN_BACKEND_DIR/sd-vulkan" ]]; then
   rm -f "$VULKAN_ZIP"
   copy_binaries_from_extracted "$VULKAN_BACKEND_DIR/extracted" "$VULKAN_BACKEND_DIR" "sd-vulkan" "sd-server-vulkan"
   rm -rf "$VULKAN_BACKEND_DIR/extracted"
-  chmod +x "$VULKAN_BACKEND_DIR/sd-vulkan" 2>/dev/null || true
   print_ok "Vulkan backend installed."
 else
   print_ok "Vulkan backend already ready."
 fi
+chmod +x "$VULKAN_BACKEND_DIR/sd-vulkan" "$VULKAN_BACKEND_DIR/sd-server-vulkan" 2>/dev/null || true
 
 # ROCm backend (optional --max-perf, or auto-detected AMD)
 ROCM_BACKEND_DIR="$BACKEND_DIR/rocm"
 if [[ $MAX_PERF -eq 1 ]] && [[ "$VENDOR" == "amd" || "$VENDOR" == "" ]]; then
-  if [[ ! -f "$ROCM_BACKEND_DIR/sd-rocm" ]]; then
+  if [[ ! -f "$ROCM_BACKEND_DIR/sd-rocm" || ! -f "$ROCM_BACKEND_DIR/sd-server-rocm" ]]; then
     mkdir -p "$ROCM_BACKEND_DIR"
     ROCM_ZIP="$TOOLS_DIR/sd-rocm.zip"
     print_warn "ROCm backend is ~1.2 GB. This may take a while..."
@@ -266,11 +333,11 @@ if [[ $MAX_PERF -eq 1 ]] && [[ "$VENDOR" == "amd" || "$VENDOR" == "" ]]; then
     rm -f "$ROCM_ZIP"
     copy_binaries_from_extracted "$ROCM_BACKEND_DIR/extracted" "$ROCM_BACKEND_DIR" "sd-rocm" "sd-server-rocm"
     rm -rf "$ROCM_BACKEND_DIR/extracted"
-    chmod +x "$ROCM_BACKEND_DIR/sd-rocm" 2>/dev/null || true
     print_ok "ROCm backend installed."
   else
     print_ok "ROCm backend already ready."
   fi
+  chmod +x "$ROCM_BACKEND_DIR/sd-rocm" "$ROCM_BACKEND_DIR/sd-server-rocm" 2>/dev/null || true
 fi
 
 # CUDA backend on Linux is intentionally disabled.
@@ -283,6 +350,7 @@ fi
 if [[ $MAX_PERF -eq 1 ]] && [[ "$VENDOR" == "nvidia" ]]; then
   print_info "Linux CUDA backend is disabled pending a reliable upstream binary."
   print_info "NVIDIA GPUs on Linux will use the Vulkan backend instead."
+fi
 fi
 
 # ── Step 3: npm install ─────────────────────────────────────────────────────
@@ -320,7 +388,7 @@ echo "   Setup complete! Run ./start.sh to launch."
 echo "  ============================================================"
 echo ""
 
-if [[ $MAX_PERF -eq 0 ]] && [[ "$VENDOR" == "nvidia" || "$VENDOR" == "amd" ]]; then
+if [[ "$PLATFORM" == "Linux" && $MAX_PERF -eq 0 ]] && [[ "$VENDOR" == "nvidia" || "$VENDOR" == "amd" ]]; then
   echo "  Tip: For maximum GPU performance, re-run with:"
   echo "       ./scripts/setup.sh --max-perf"
   echo ""
