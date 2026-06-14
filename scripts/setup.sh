@@ -28,6 +28,16 @@ fi
 NODE_BIN="$NODE_DIR/bin/node"
 NPM_BIN="$NODE_DIR/bin/npm"
 
+# Check if filesystem supports symlinks
+USE_SYMLINKS=true
+TEST_LINK="$ROOT_DIR/.test_symlink"
+rm -f "$TEST_LINK"
+if ln -s "test" "$TEST_LINK" 2>/dev/null; then
+  rm -f "$TEST_LINK"
+else
+  USE_SYMLINKS=false
+fi
+
 # Release pins
 SD_RELEASE="master-685-19bdfe2"
 SD_SHORT_HASH="${SD_RELEASE##*-}"
@@ -144,7 +154,25 @@ extract_tarxz() {
   local tar_path="$1" dest="$2" label="$3"
   print_info "Extracting: $label"
   mkdir -p "$dest"
-  tar -xf "$tar_path" -C "$dest"
+  if [ "$USE_SYMLINKS" = false ]; then
+    # On filesystems that do not support symlinks, tar will fail when attempting to create symlinks
+    # (e.g. for npm/npx/corepack in Node.js bin/). We allow it to continue but verify key files.
+    local tar_exit=0
+    tar -xf "$tar_path" -C "$dest" || tar_exit=$?
+    if [[ $tar_exit -ne 0 ]]; then
+      # Check if node binary was extracted successfully
+      local check_file
+      check_file="$(find "$dest" -type f -name "node" | head -n 1)"
+      if [[ -n "$check_file" ]]; then
+        print_warn "tar returned exit code $tar_exit due to symlink failures on this filesystem, but bin/node was successfully extracted."
+      else
+        print_fail "tar extraction failed with exit code $tar_exit (could not find bin/node)"
+        exit $tar_exit
+      fi
+    fi
+  else
+    tar -xf "$tar_path" -C "$dest"
+  fi
   print_ok "Extracted $label"
 }
 
@@ -250,6 +278,34 @@ else
   if [[ -d "$EXTRACTED_DIR" ]]; then
     rm -rf "$NODE_DIR"
     mv "$EXTRACTED_DIR" "$NODE_DIR"
+  fi
+
+  if [ "$USE_SYMLINKS" = false ]; then
+    print_info "Filesystem does not support symlinks. Creating shell wrappers for npm, npx, and corepack..."
+    rm -f "$NODE_DIR/bin/npm" "$NODE_DIR/bin/npx" "$NODE_DIR/bin/corepack"
+    
+    cat << 'EOF' > "$NODE_DIR/bin/npm"
+#!/bin/sh
+basedir=$(dirname "$0")
+exec "$basedir/node" "$basedir/../lib/node_modules/npm/bin/npm-cli.js" "$@"
+EOF
+    chmod +x "$NODE_DIR/bin/npm"
+
+    cat << 'EOF' > "$NODE_DIR/bin/npx"
+#!/bin/sh
+basedir=$(dirname "$0")
+exec "$basedir/node" "$basedir/../lib/node_modules/npm/bin/npx-cli.js" "$@"
+EOF
+    chmod +x "$NODE_DIR/bin/npx"
+
+    cat << 'EOF' > "$NODE_DIR/bin/corepack"
+#!/bin/sh
+basedir=$(dirname "$0")
+exec "$basedir/node" "$basedir/../lib/node_modules/corepack/dist/corepack.js" "$@"
+EOF
+    chmod +x "$NODE_DIR/bin/corepack"
+    
+    print_ok "Created shell wrappers."
   fi
 
   if [[ ! -x "$NODE_BIN" || ! -x "$NPM_BIN" ]]; then
