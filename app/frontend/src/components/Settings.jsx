@@ -523,6 +523,30 @@ function Settings({
                 </span>
               </div>
 
+              {/* Show Thinking Process toggle */}
+              <div style={{ marginTop: "16px" }}>
+                <label style={{ display: "flex", alignItems: "flex-start", gap: "10px", cursor: "pointer", fontSize: "0.85rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={textSettings.enableThinking !== false}
+                    onChange={(e) => updateTextSetting("enableThinking", e.target.checked)}
+                    style={{
+                      width: "16px",
+                      height: "16px",
+                      marginTop: "3px",
+                      accentColor: "var(--md-sys-color-primary)",
+                      cursor: "pointer"
+                    }}
+                  />
+                  <div>
+                    <strong style={{ color: "var(--md-sys-color-on-surface)" }}>Show Thinking Process</strong>
+                    <div style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", marginTop: "2px", lineHeight: 1.35 }}>
+                      Enables the collapsible dropdown for models that support reasoning/thinking process (e.g. DeepSeek-R1, Gemma-4-E2B). If turned off, reasoning is hidden and stripped from the conversation view.
+                    </div>
+                  </div>
+                </label>
+              </div>
+
               {/* Temperature slider */}
               <div className="m3-slider-group" style={{ marginTop: "16px" }}>
                 <div className="m3-slider-header">

@@ -346,6 +346,7 @@ export async function startLlm(model, options = {}) {
       threads: options.threads,
       contextSize: options.contextSize,
       gpuLayers: options.gpuLayers,
+      enableThinking: options.enableThinking,
     }),
   });
   return await readJsonResponse(res, "The local server returned an invalid text backend response.");
@@ -401,6 +402,7 @@ export async function streamChatWithLlm(messages, options = {}, onToken = () => 
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
   let content = "";
+  let reasoningContent = "";
   let usage = null;
   let timings = null;
 
@@ -416,9 +418,12 @@ export async function streamChatWithLlm(messages, options = {}, onToken = () => 
 
       const parsed = JSON.parse(data);
       const token = parsed.choices?.[0]?.delta?.content || "";
-      if (token) {
+      const reasoningToken = parsed.choices?.[0]?.delta?.reasoning_content || "";
+
+      if (token || reasoningToken) {
         content += token;
-        onToken(token, content);
+        reasoningContent += reasoningToken;
+        onToken(token, content, reasoningToken, reasoningContent);
       }
       if (parsed.usage) usage = parsed.usage;
       if (parsed.timings) timings = parsed.timings;
@@ -446,8 +451,8 @@ export async function streamChatWithLlm(messages, options = {}, onToken = () => 
   }
 
   if (!finished && buffer.trim()) consumeEvent(buffer);
-  if (!content) throw new Error("The text model returned an empty streamed response.");
-  return { content, usage, timings };
+  if (!content && !reasoningContent) throw new Error("The text model returned an empty streamed response.");
+  return { content, reasoningContent, usage, timings };
 }
 
 export async function downloadLlmModel(url, filename = null) {

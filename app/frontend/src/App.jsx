@@ -118,14 +118,19 @@ function App() {
     const saved = localStorage.getItem("textSettings");
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        return {
+          enableThinking: true,
+          ...parsed
+        };
       } catch (_) {}
     }
     return {
       contextSize: 0,
       temperature: 0.7,
       systemPrompt: "You are a helpful local AI assistant.",
-      threads: 4
+      threads: 4,
+      enableThinking: true
     };
   });
 

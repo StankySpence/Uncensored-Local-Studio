@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, LoaderCircle, Send, Trash2, Square, History, Paperclip, X } from "lucide-react";
+import { Bot, LoaderCircle, Send, Trash2, Square, History, Paperclip, X, ChevronDown } from "lucide-react";
 import {
   getDownloadProgress,
   getLlmStatus,
@@ -8,6 +8,99 @@ import {
   startLlm,
   stopLlm,
 } from "../services/api";
+
+const processMessageContent = (rawText, apiReasoning = "") => {
+  let content = rawText;
+  let reasoning = apiReasoning || "";
+
+  if (typeof rawText !== "string") {
+    return { content, reasoning };
+  }
+
+  const startTags = ["<|channel|>thought", "<|think|>", "<|thought|>", "<think>", "<thought>"];
+  const endTags = ["<|channel|>model", "<|turn>model", "<|im_start|>model", "</think>", "</thought>", "</|think>", "</|thought>"];
+
+  let startIdx = -1;
+  let matchedStartTag = "";
+
+  for (const tag of startTags) {
+    const idx = rawText.indexOf(tag);
+    if (idx !== -1 && (startIdx === -1 || idx < startIdx)) {
+      startIdx = idx;
+      matchedStartTag = tag;
+    }
+  }
+
+  if (startIdx !== -1) {
+    let endIdx = -1;
+    let matchedEndTag = "";
+    const searchArea = rawText.substring(startIdx + matchedStartTag.length);
+
+    for (const tag of endTags) {
+      const idx = searchArea.indexOf(tag);
+      if (idx !== -1 && (endIdx === -1 || idx < endIdx)) {
+        endIdx = idx;
+        matchedEndTag = tag;
+      }
+    }
+
+    if (endIdx !== -1) {
+      const actualEndIdxInRaw = startIdx + matchedStartTag.length + endIdx;
+      const extractedReasoning = rawText.substring(startIdx + matchedStartTag.length, actualEndIdxInRaw).trim();
+      reasoning = (reasoning + "\n" + extractedReasoning).trim();
+      
+      const afterEndText = rawText.substring(actualEndIdxInRaw + matchedEndTag.length);
+      content = rawText.substring(0, startIdx) + afterEndText;
+      
+      return processMessageContent(content, reasoning);
+    } else {
+      const extractedReasoning = rawText.substring(startIdx + matchedStartTag.length).trim();
+      reasoning = (reasoning + "\n" + extractedReasoning).trim();
+      content = rawText.substring(0, startIdx);
+    }
+  }
+
+  return { content, reasoning };
+};
+
+function ThinkingBlock({ reasoning, isComplete, thinkingDuration }) {
+  const [isExpanded, setIsExpanded] = useState(!isComplete);
+
+  useEffect(() => {
+    if (isComplete) {
+      setIsExpanded(false);
+    }
+  }, [isComplete]);
+
+  if (!reasoning) return null;
+
+  const formattedTime = thinkingDuration > 0 ? ` (${thinkingDuration.toFixed(1)}s)` : "";
+
+  return (
+    <div className="chat-thinking-container">
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="chat-thinking-header"
+      >
+        <span className="chat-thinking-title">
+          {isComplete ? `Thought process${formattedTime}` : `Thinking...${formattedTime}`}
+        </span>
+        <ChevronDown
+          size={14}
+          style={{
+            transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)",
+            transition: "transform 0.2s ease",
+          }}
+        />
+      </button>
+      {isExpanded && (
+        <div className="chat-thinking-content">
+          {reasoning}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function TextChat({ 
   specs, 
@@ -245,6 +338,7 @@ function TextChat({
         threads: textSettings?.threads || specs?.cpu_cores_physical || 4,
         contextSize: textSettings?.contextSize || 4096,
         gpuLayers: -1,
+        enableThinking: textSettings?.enableThinking !== false,
       });
       setStatus({ ...status, ...result, ready: true, running: true, settings: result.settings });
       setMessages([]);
@@ -339,14 +433,18 @@ function TextChat({
       ];
 
       let assistantText = "";
+      let assistantReasoning = "";
       let streamedTokens = 0;
       let firstTokenAt = null;
+      let thinkingStartedAt = null;
+      let thinkingEndedAt = null;
+      let thinkingDuration = 0;
 
       const response = await streamChatWithLlm(requestMessages, {
         temperature: textSettings?.temperature || 0.7,
         maxTokens: 768,
         signal: controller.signal,
-      }, (_token, fullText) => {
+      }, (_token, fullText, _reasoningToken, fullReasoning) => {
         const now = performance.now();
         if (streamedTokens === 0) {
           firstTokenAt = now;
@@ -355,13 +453,31 @@ function TextChat({
         const generationSeconds = firstTokenAt
           ? Math.max(0.05, (now - firstTokenAt) / 1000)
           : Math.max(0.05, (now - requestStartedAt) / 1000);
-        assistantText = fullText;
+        
+        const processed = processMessageContent(fullText, fullReasoning);
+        assistantText = processed.content;
+        assistantReasoning = processed.reasoning;
+
+        // Calculate thinking duration
+        if (processed.reasoning && !thinkingStartedAt) {
+          thinkingStartedAt = now;
+        }
+        if (processed.content && thinkingStartedAt && !thinkingEndedAt) {
+          thinkingEndedAt = now;
+          thinkingDuration = (thinkingEndedAt - thinkingStartedAt) / 1000;
+        }
+        const currentThinkingDuration = thinkingEndedAt 
+          ? thinkingDuration 
+          : (thinkingStartedAt ? (now - thinkingStartedAt) / 1000 : 0);
+
         setMessages((prev) => {
           const updated = [...prev];
           if (updated.length > 0 && updated[updated.length - 1].role === "assistant") {
             updated[updated.length - 1] = {
               ...updated[updated.length - 1],
-              content: fullText,
+              content: processed.content,
+              reasoning: processed.reasoning,
+              thinkingDuration: currentThinkingDuration,
               generationStats: {
                 status: "streaming",
                 tokens: streamedTokens,
@@ -375,6 +491,12 @@ function TextChat({
       });
 
       const completedAt = performance.now();
+      let finalThinkingDuration = thinkingDuration;
+      if (thinkingStartedAt && !thinkingEndedAt) {
+        thinkingEndedAt = completedAt;
+        finalThinkingDuration = (thinkingEndedAt - thinkingStartedAt) / 1000;
+      }
+
       const exactTokens = Number(response.timings?.predicted_n) || streamedTokens;
       const backendTotalMs = Number(response.timings?.prompt_ms || 0) + Number(response.timings?.predicted_ms || 0);
       const exactSeconds = backendTotalMs > 0
@@ -388,9 +510,13 @@ function TextChat({
         tokensPerSecond: exactTokensPerSecond,
         seconds: exactSeconds,
       };
+      
+      const processed = processMessageContent(assistantText, response.reasoningContent || assistantReasoning);
       const finalMessages = [...nextMessages, {
         role: "assistant",
-        content: assistantText,
+        content: processed.content,
+        reasoning: processed.reasoning,
+        thinkingDuration: finalThinkingDuration,
         generationStats,
       }];
       setMessages(finalMessages);
@@ -594,54 +720,70 @@ function TextChat({
                 </div>
               )}
 
-              {messages.map((message, index) => (
-                <div
-                  key={`${message.role}-${index}`}
-                  className={`chat-message-row ${message.role === "user" ? "user" : "ai"}`}
-                >
-                  {/* Avatar */}
-                  <div className={`chat-avatar ${message.role === "user" ? "user" : "ai"}`}>
-                    {message.role === "user" ? "You" : "AI"}
-                  </div>
+              {messages.map((message, index) => {
+                const processed = processMessageContent(
+                  Array.isArray(message.content) ? "" : (message.content || ""),
+                  message.reasoning || ""
+                );
+                const displayContent = Array.isArray(message.content) ? message.content : processed.content;
+                const displayReasoning = processed.reasoning;
 
-                  {/* Bubble + stats */}
-                  <div className="chat-bubble-wrap">
-                    <span className="chat-sender-label">
-                      {message.role === "user" ? "You" : "Local AI"}
-                    </span>
-                    <div className={`chat-bubble ${message.error ? "error" : ""}`}>
-                      {Array.isArray(message.content) ? (
-                        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                          {message.content.map((item, idx) => {
-                            if (item.type === "text") return <MarkdownRenderer key={idx} content={item.text} />;
-                            if (item.type === "image_url") return (
-                              <img key={idx} src={item.image_url.url} alt="Attached image"
-                                style={{ maxWidth: "240px", maxHeight: "180px", objectFit: "contain", borderRadius: "8px", marginTop: "4px" }}
-                              />
-                            );
-                            return null;
-                          })}
-                        </div>
-                      ) : (
-                        <MarkdownRenderer content={message.content} />
-                      )}
+                return (
+                  <div
+                    key={`${message.role}-${index}`}
+                    className={`chat-message-row ${message.role === "user" ? "user" : "ai"}`}
+                  >
+                    {/* Avatar */}
+                    <div className={`chat-avatar ${message.role === "user" ? "user" : "ai"}`}>
+                      {message.role === "user" ? "You" : "AI"}
                     </div>
 
-                    {/* Generation stats pill */}
-                    {message.role === "assistant" && message.generationStats && !message.error && (
-                      <div className={`chat-generation-stats ${message.generationStats.status}`}>
-                        {message.generationStats.status === "starting" ? (
-                          <><LoaderCircle size={11} className="progress-spinner" /> Waiting for first token...</>
-                        ) : message.generationStats.status === "streaming" ? (
-                          <><span style={{ opacity: 0.7 }}>⚡</span> {message.generationStats.tokensPerSecond.toFixed(1)} tok/s</>
+                    {/* Bubble + stats */}
+                    <div className="chat-bubble-wrap">
+                      <span className="chat-sender-label">
+                        {message.role === "user" ? "You" : "Local AI"}
+                      </span>
+                      {message.role === "assistant" && displayReasoning && textSettings?.enableThinking !== false && (
+                        <ThinkingBlock
+                          reasoning={displayReasoning}
+                          thinkingDuration={message.thinkingDuration}
+                          isComplete={!message.generationStats || message.generationStats.status === "complete"}
+                        />
+                      )}
+                      <div className={`chat-bubble ${message.error ? "error" : ""}`}>
+                        {Array.isArray(displayContent) ? (
+                          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                            {displayContent.map((item, idx) => {
+                              if (item.type === "text") return <MarkdownRenderer key={idx} content={item.text} />;
+                              if (item.type === "image_url") return (
+                                <img key={idx} src={item.image_url.url} alt="Attached image"
+                                  style={{ maxWidth: "240px", maxHeight: "180px", objectFit: "contain", borderRadius: "8px", marginTop: "4px" }}
+                                />
+                              );
+                              return null;
+                            })}
+                          </div>
                         ) : (
-                          <>{message.generationStats.tokens} tokens <span style={{ opacity: 0.5 }}>•</span> {formatGenerationTime(message.generationStats.seconds)}</>
+                          <MarkdownRenderer content={displayContent} />
                         )}
                       </div>
-                    )}
+
+                      {/* Generation stats pill */}
+                      {message.role === "assistant" && message.generationStats && !message.error && (
+                        <div className={`chat-generation-stats ${message.generationStats.status}`}>
+                          {message.generationStats.status === "starting" ? (
+                            <><LoaderCircle size={11} className="progress-spinner" /> Waiting for first token...</>
+                          ) : message.generationStats.status === "streaming" ? (
+                            <><span style={{ opacity: 0.7 }}>⚡</span> {message.generationStats.tokensPerSecond.toFixed(1)} tok/s</>
+                          ) : (
+                            <>{message.generationStats.tokens} tokens <span style={{ opacity: 0.5 }}>•</span> {formatGenerationTime(message.generationStats.seconds)}</>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </>
           )}
           <div ref={bottomRef} />
@@ -691,27 +833,69 @@ function TextChat({
               onClick={() => fileInputRef.current?.click()}
               disabled={!supportsVision || isBusy}
               title={supportsVision ? "Attach files or images" : "Image attachment requires a vision model with an mmproj file"}
+              style={{ marginBottom: "2px" }}
             >
               <Paperclip size={17} />
             </button>
 
-            <textarea
-              className="chat-composer-textarea"
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  sendMessage();
-                }
-              }}
-              placeholder={status.ready ? "Message your local model... (Shift+Enter for new line)" : "Select and load a GGUF model above to begin"}
-              disabled={!status.ready || isBusy}
-              rows={1}
-            />
+            <div className="chat-composer-middle" style={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px" }}>
+              <textarea
+                className="chat-composer-textarea"
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    sendMessage();
+                  }
+                }}
+                placeholder={status.ready ? "Message your local model... (Shift+Enter for new line)" : "Select and load a GGUF model above to begin"}
+                disabled={!status.ready || isBusy}
+                rows={1}
+              />
+
+              {status.ready && (
+                <button
+                  className={`chat-composer-deepthink-btn ${textSettings.enableThinking !== false ? "active" : ""}`}
+                  onClick={() => {
+                    const newVal = textSettings.enableThinking === false;
+                    setTextSettings(prev => ({
+                      ...prev,
+                      enableThinking: newVal
+                    }));
+                  }}
+                  title={textSettings.enableThinking !== false ? "Disable DeepThink reasoning" : "Enable DeepThink reasoning"}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    padding: "6px 12px",
+                    borderRadius: "14px",
+                    border: "1px solid var(--border-color)",
+                    background: textSettings.enableThinking !== false ? "rgba(99, 102, 241, 0.15)" : "transparent",
+                    color: textSettings.enableThinking !== false ? "var(--md-sys-color-primary)" : "var(--md-sys-color-outline)",
+                    fontFamily: "Outfit, sans-serif",
+                    fontSize: "0.82rem",
+                    fontWeight: "600",
+                    cursor: "pointer",
+                    alignSelf: "flex-start",
+                    marginBottom: "4px",
+                    transition: "all 0.2s ease"
+                  }}
+                >
+                  {/* SVG Atom Icon */}
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ transition: "transform 0.5s ease" }} className={textSettings.enableThinking !== false ? "rotate-anim" : ""}>
+                    <circle cx="12" cy="12" r="3" />
+                    <ellipse cx="12" cy="12" rx="3" ry="9" />
+                    <ellipse cx="12" cy="12" rx="9" ry="3" />
+                  </svg>
+                  DeepThink
+                </button>
+              )}
+            </div>
 
             {isBusy && status.ready ? (
-              <button className="chat-composer-stop-btn" onClick={handleStopGeneration} title="Stop generation">
+              <button className="chat-composer-stop-btn" onClick={handleStopGeneration} title="Stop generation" style={{ marginBottom: "2px" }}>
                 <Square size={15} fill="currentColor" />
               </button>
             ) : (
@@ -720,6 +904,7 @@ function TextChat({
                 onClick={sendMessage}
                 disabled={(!input.trim() && attachments.length === 0) || !status.ready}
                 title="Send message"
+                style={{ marginBottom: "2px" }}
               >
                 <Send size={17} />
               </button>

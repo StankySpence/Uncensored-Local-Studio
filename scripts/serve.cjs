@@ -1003,7 +1003,10 @@ function getLlmBackend() {
 function getLlmModels() {
   try {
     return fs.readdirSync(LLM_MODELS)
-      .filter((filename) => filename.toLowerCase().endsWith(".gguf"))
+      .filter((filename) => {
+        const lower = filename.toLowerCase();
+        return lower.endsWith(".gguf") && !lower.includes("mmproj");
+      })
       .map((filename) => {
         const stats = fs.statSync(path.join(LLM_MODELS, filename));
         return {
@@ -1803,11 +1806,24 @@ async function searchHuggingFaceModels(query, filters) {
     ? "high"
     : specs.gpu_vram_gb >= 5 || specs.ram_total_gb >= 16 ? "mid" : "low";
   const defaultSearch = tier === "low" ? "1B instruct" : tier === "mid" ? "7B instruct" : "8B instruct";
-  const searchTerms = [
-    query.trim() || defaultSearch,
-    filters.includes("vision") ? "vision" : "",
-    filters.includes("uncensored") ? "uncensored" : "",
-  ].filter(Boolean).join(" ");
+  let searchTerms = "";
+  if (query.trim()) {
+    searchTerms = [
+      query.trim(),
+      filters.includes("vision") ? "vision" : "",
+      filters.includes("uncensored") ? "uncensored" : "",
+    ].filter(Boolean).join(" ");
+  } else {
+    if (filters.includes("vision") && filters.includes("uncensored")) {
+      searchTerms = "vision uncensored gguf";
+    } else if (filters.includes("vision")) {
+      searchTerms = "vision gguf";
+    } else if (filters.includes("uncensored")) {
+      searchTerms = "uncensored gguf";
+    } else {
+      searchTerms = defaultSearch;
+    }
+  }
   const cacheKey = `${tier}|${searchTerms}|${filters.sort().join(",")}`;
   const cached = hfModelCache.get(cacheKey);
   if (cached && Date.now() - cached.createdAt < HF_MODEL_CACHE_TTL_MS) return cached.models;
@@ -1828,7 +1844,6 @@ async function searchHuggingFaceModels(query, filters) {
     const filename = selectGgufFile(model.siblings, tier);
     if (!filename) continue;
     const traits = classifyHuggingFaceModel(model, filename);
-    if (filters.includes("potato") && !traits.potato) continue;
     if (filters.includes("vision") && !traits.vision) continue;
     if (filters.includes("uncensored") && !traits.uncensored) continue;
 
@@ -1840,7 +1855,7 @@ async function searchHuggingFaceModels(query, filters) {
     const exactPhraseMatch = normalizedQuery && normalizedModelName.includes(normalizedQuery);
     const matchedQueryWords = queryWords.filter((word) => normalizedModelName.includes(word)).length;
     const score = Number(model.downloads || 0)
-      + (traits.potato && tier === "low" ? 10000000 : 0)
+      + (traits.parameters && traits.parameters <= 3 && tier === "low" ? 10000000 : 0)
       + (traits.parameters && tier === "mid" && traits.parameters >= 4 && traits.parameters <= 9 ? 10000000 : 0)
       + (traits.parameters && tier === "high" && traits.parameters >= 7 && traits.parameters <= 14 ? 10000000 : 0)
       + (exactPhraseMatch ? 100000000 : 0)
@@ -2165,6 +2180,7 @@ async function startLlm(settings = {}) {
     gpuLayers: Number.isFinite(Number(settings.gpuLayers)) ? Number(settings.gpuLayers) : -1,
     backendMode: backend.mode,
     backendBinary: path.basename(backend.path),
+    enableThinking: settings.enableThinking !== false,
   };
 
   let mmprojPath = null;
@@ -2172,6 +2188,18 @@ async function startLlm(settings = {}) {
   const isMultimodal = lowerFilename.includes("llava") ||
                        lowerFilename.includes("vision") ||
                        lowerFilename.includes("qwen2vl") ||
+                       lowerFilename.includes("qwen2-vl") ||
+                       lowerFilename.includes("gemma-4") ||
+                       lowerFilename.includes("gemma4") ||
+                       lowerFilename.includes("-e2b-") ||
+                       lowerFilename.includes("e2b-it") ||
+                       lowerFilename.includes("paligemma") ||
+                       lowerFilename.includes("minicpm-v") ||
+                       lowerFilename.includes("internvl") ||
+                       lowerFilename.includes("phi-3-vision") ||
+                       lowerFilename.includes("phi3-vision") ||
+                       lowerFilename.includes("smolvlm") ||
+                       lowerFilename.includes("moondream") ||
                        lowerFilename === "ggml-model-q4_k.gguf";
 
   if (isMultimodal) {
@@ -2184,12 +2212,40 @@ async function startLlm(settings = {}) {
     if (!mmprojPath) {
       try {
         const files = fs.readdirSync(LLM_MODELS);
-        const mmprojFile = files.find(file => {
-          const lower = file.toLowerCase();
-          return lower.endsWith(".gguf") && (lower === "mmproj-model-f16.gguf" || lower.includes("mmproj"));
-        });
-        if (mmprojFile) {
-          mmprojPath = path.join(LLM_MODELS, mmprojFile);
+        let bestMatch = null;
+        
+        // 1. Match by Hugging Face repository prefix (e.g., "unsloth--gemma-4-E2B-it-qat-GGUF--")
+        if (filename.includes("--")) {
+          const lastIndex = filename.lastIndexOf("--");
+          const repoPrefix = filename.substring(0, lastIndex + 2);
+          bestMatch = files.find(file => {
+            const lower = file.toLowerCase();
+            return file.startsWith(repoPrefix) && lower.includes("mmproj") && lower.endsWith(".gguf");
+          });
+        }
+        
+        // 2. Match by model family keyword (e.g. matching model containing "gemma-4" with projector containing "gemma-4")
+        if (!bestMatch) {
+          const keywords = ["gemma-4", "gemma4", "llava", "qwen2vl", "qwen2-vl", "paligemma", "minicpm", "internvl", "phi-3", "phi3", "smolvlm", "moondream"];
+          const matchedKeyword = keywords.find(kw => lowerFilename.includes(kw));
+          if (matchedKeyword) {
+            bestMatch = files.find(file => {
+              const lower = file.toLowerCase();
+              return lower.endsWith(".gguf") && lower.includes("mmproj") && lower.includes(matchedKeyword);
+            });
+          }
+        }
+        
+        // 3. General fallback
+        if (!bestMatch) {
+          bestMatch = files.find(file => {
+            const lower = file.toLowerCase();
+            return lower.endsWith(".gguf") && (lower === "mmproj-model-f16.gguf" || lower.includes("mmproj"));
+          });
+        }
+        
+        if (bestMatch) {
+          mmprojPath = path.join(LLM_MODELS, bestMatch);
         }
       } catch (_) {}
     }
@@ -2206,6 +2262,9 @@ async function startLlm(settings = {}) {
     "--cache-ram", "0",
     "--no-warmup",
   ];
+  if (llmSettings.enableThinking === false) {
+    args.push("--reasoning-format", "none");
+  }
   if (mmprojPath) {
     args.push("--mmproj", mmprojPath);
   }
@@ -3321,7 +3380,7 @@ const server = http.createServer(async (req, res) => {
     const filters = String(parsed.searchParams.get("filters") || "")
       .split(",")
       .map((value) => value.trim().toLowerCase())
-      .filter((value) => ["potato", "vision", "uncensored"].includes(value));
+      .filter((value) => ["vision", "uncensored"].includes(value));
     const page = Math.max(1, Math.min(20, Number(parsed.searchParams.get("page")) || 1));
     const pageSize = 9;
     try {
@@ -3386,6 +3445,7 @@ async function retryLowerContext() {
     threads: llmSettings.threads,
     contextSize: nextLimit,
     gpuLayers: llmSettings.gpuLayers,
+    enableThinking: llmSettings.enableThinking,
   };
   
   await startLlm(newSettings);

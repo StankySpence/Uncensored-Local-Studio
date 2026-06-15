@@ -25,7 +25,6 @@ import {
 } from "../services/api";
 
 const MODEL_FILTERS = [
-  { id: "potato", label: "Potato PC" },
   { id: "vision", label: "Vision" },
   { id: "uncensored", label: "Uncensored" },
 ];
