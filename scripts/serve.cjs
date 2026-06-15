@@ -221,41 +221,216 @@ function getGpuInfo() {
 
   if (osPlatform === "win32") {
     try {
+      const stdout = execSync(
+        'powershell -NoProfile -Command "Get-CimInstance Win32_VideoController | ForEach-Object { [PSCustomObject]@{ Name = $_.Name; VRAM = [math]::Round($_.AdapterRAM / 1GB, 2) } } | ConvertTo-Json"',
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
+      ).trim();
+      if (stdout) {
+        let gpus = [];
+        try {
+          const parsed = JSON.parse(stdout);
+          if (Array.isArray(parsed)) {
+            gpus = parsed;
+          } else if (parsed && typeof parsed === "object") {
+            gpus = [parsed];
+          }
+        } catch (_) {}
+
+        if (gpus.length > 0) {
+          const discreteKeywords = ["nvidia", "amd", "arc", "geforce", "radeon", "rtx", "gtx"];
+          let selectedGpu = gpus.find(gpu => {
+            const name = String(gpu.Name || "").toLowerCase();
+            return discreteKeywords.some(kw => name.includes(kw));
+          });
+          if (!selectedGpu) {
+            selectedGpu = gpus[0];
+          }
+          cachedGpuInfo = {
+            name: selectedGpu.Name || "Unknown GPU",
+            vram_gb: typeof selectedGpu.VRAM === "number" ? selectedGpu.VRAM : 0
+          };
+          return cachedGpuInfo;
+        }
+      }
+    } catch (_) {}
+    // Fallback if Powershell fails or returns empty
+    try {
       const output = execSync(
         "powershell -NoProfile -Command \"Get-CimInstance Win32_VideoController | Select-Object -First 1 -ExpandProperty Name\"",
         { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
       ).trim();
       if (output) {
-        cachedGpuInfo = { name: output };
+        cachedGpuInfo = { name: output, vram_gb: 0 };
         return cachedGpuInfo;
       }
     } catch (_) {}
-  }
-
-  if (osPlatform === "linux") {
-    const linuxGpu = detectLinuxGpuFromSysfs();
-    if (linuxGpu) {
-      cachedGpuInfo = linuxGpu;
-      return cachedGpuInfo;
-    }
   }
 
   if (osPlatform === "darwin") {
     try {
-      const output = execSync(
-        "system_profiler SPDisplaysDataType | awk -F': ' '/Chipset Model|Vendor/ {print $2; exit}'",
-        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-      ).trim();
-      if (output) {
-        cachedGpuInfo = { name: output };
-        return cachedGpuInfo;
+      const output = execSync("system_profiler SPDisplaysDataType", {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      const lines = output.split("\n");
+      let currentGpu = null;
+      const gpus = [];
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("Chipset Model:")) {
+          if (currentGpu) {
+            gpus.push(currentGpu);
+          }
+          currentGpu = {
+            name: trimmed.substring("Chipset Model:".length).trim(),
+            vram_gb: 0,
+          };
+        } else if (currentGpu && (trimmed.startsWith("VRAM (Total):") || trimmed.startsWith("VRAM (Dynamic, Max):"))) {
+          const valStr = trimmed.split(":")[1].trim(); // e.g. "2 GB" or "1536 MB"
+          let bytesVal = 0;
+          const numMatch = valStr.match(/^([\d\.]+)\s*(GB|MB)/i);
+          if (numMatch) {
+            const val = parseFloat(numMatch[1]);
+            const unit = numMatch[2].toUpperCase();
+            if (unit === "GB") {
+              bytesVal = val;
+            } else if (unit === "MB") {
+              bytesVal = val / 1024;
+            }
+          }
+          currentGpu.vram_gb = Math.round(bytesVal * 100) / 100;
+        }
+      }
+      if (currentGpu) {
+        gpus.push(currentGpu);
+      }
+
+      if (gpus.length > 0) {
+        const isAppleSilicon = gpus.some(g => {
+          const name = g.name.toLowerCase();
+          return name.includes("apple") || name.includes("m1") || name.includes("m2") || name.includes("m3") || name.includes("m4");
+        }) || (os.arch() === "arm64");
+
+        if (isAppleSilicon) {
+          const totalRamGb = Math.round((os.totalmem() / (1024 ** 3)) * 100) / 100;
+          let selected = gpus.find(g => g.name.toLowerCase().includes("apple")) || gpus[0];
+          cachedGpuInfo = {
+            name: selected.name,
+            vram_gb: totalRamGb
+          };
+          return cachedGpuInfo;
+        } else {
+          const discreteKeywords = ["nvidia", "amd", "radeon", "geforce"];
+          let selected = gpus.find(gpu => {
+            const name = gpu.name.toLowerCase();
+            return discreteKeywords.some(kw => name.includes(kw));
+          });
+          if (!selected) {
+            selected = gpus[0];
+          }
+          cachedGpuInfo = {
+            name: selected.name,
+            vram_gb: selected.vram_gb
+          };
+          return cachedGpuInfo;
+        }
       }
     } catch (_) {}
-    cachedGpuInfo = { name: "Apple Metal GPU" };
+    // Fallback if system_profiler command fails
+    const totalRamGb = Math.round((os.totalmem() / (1024 ** 3)) * 100) / 100;
+    cachedGpuInfo = { name: "Apple Metal GPU", vram_gb: totalRamGb };
     return cachedGpuInfo;
   }
 
-  cachedGpuInfo = { name: "Unavailable" };
+  if (osPlatform === "linux") {
+    // AMD cards: Scan /sys/class/drm/card*/device/vendor and mem_info_vram_total
+    try {
+      if (fs.existsSync("/sys/class/drm")) {
+        const cards = fs.readdirSync("/sys/class/drm").filter(name => name.startsWith("card"));
+        for (const card of cards) {
+          const vendorPath = `/sys/class/drm/${card}/device/vendor`;
+          const vramPath = `/sys/class/drm/${card}/device/mem_info_vram_total`;
+          if (fs.existsSync(vendorPath) && fs.existsSync(vramPath)) {
+            const vendor = fs.readFileSync(vendorPath, "utf8").trim();
+            if (vendor === "0x1002") {
+              const vramBytesStr = fs.readFileSync(vramPath, "utf8").trim();
+              const vramBytes = parseFloat(vramBytesStr);
+              if (!isNaN(vramBytes)) {
+                cachedGpuInfo = {
+                  name: "AMD Radeon GPU",
+                  vram_gb: Math.round((vramBytes / (1024 ** 3)) * 100) / 100
+                };
+                return cachedGpuInfo;
+              }
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    // NVIDIA cards: read /proc/driver/nvidia/gpus/*/information or run nvidia-smi
+    try {
+      if (fs.existsSync("/proc/driver/nvidia/gpus")) {
+        const gpuDirs = fs.readdirSync("/proc/driver/nvidia/gpus");
+        for (const gpuDir of gpuDirs) {
+          const infoPath = `/proc/driver/nvidia/gpus/${gpuDir}/information`;
+          if (fs.existsSync(infoPath)) {
+            const info = fs.readFileSync(infoPath, "utf8");
+            const modelMatch = info.match(/Model:\s+(.*)/);
+            if (modelMatch) {
+              const modelName = modelMatch[1].trim();
+              let vram_gb = 0;
+              try {
+                const smiOut = execSync("nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits", {
+                  encoding: "utf8",
+                  stdio: ["ignore", "pipe", "ignore"]
+                }).trim();
+                const parsedVal = parseFloat(smiOut);
+                if (!isNaN(parsedVal)) {
+                  vram_gb = Math.round((parsedVal / 1024) * 100) / 100;
+                }
+              } catch (_) {}
+              cachedGpuInfo = {
+                name: modelName,
+                vram_gb: vram_gb || 8.0
+              };
+              return cachedGpuInfo;
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    try {
+      const smiOut = execSync("nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits", {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"]
+      }).trim();
+      if (smiOut) {
+        const lines = smiOut.split("\n");
+        if (lines[0]) {
+          const [name, totalMb] = lines[0].split(",").map(p => p.trim());
+          const parsedVal = parseFloat(totalMb);
+          cachedGpuInfo = {
+            name: name || "NVIDIA GPU",
+            vram_gb: !isNaN(parsedVal) ? Math.round((parsedVal / 1024) * 100) / 100 : 8.0
+          };
+          return cachedGpuInfo;
+        }
+      }
+    } catch (_) {}
+
+    const linuxGpu = detectLinuxGpuFromSysfs();
+    if (linuxGpu) {
+      cachedGpuInfo = {
+        name: linuxGpu.name,
+        vram_gb: 0
+      };
+      return cachedGpuInfo;
+    }
+  }
+
+  cachedGpuInfo = { name: "Unavailable", vram_gb: 0 };
   return cachedGpuInfo;
 }
 
@@ -365,13 +540,109 @@ if (osPlatform === "darwin") {
 function getHardwareSpecs() {
   const cpus = os.cpus();
   const gpu = getGpuInfo();
+  const ramTotalGb = roundGb(os.totalmem());
+  const gpuVramGb = gpu.vram_gb || 0;
+
+  // Tiering logic
+  let tier = "low";
+  let tierReason = "";
+
+  const isAppleSilicon = osPlatform === "darwin" && (os.arch() === "arm64" || String(cpus[0]?.model || "").toLowerCase().includes("apple"));
+
+  if (isAppleSilicon) {
+    if (ramTotalGb >= 16) {
+      tier = "high";
+      tierReason = `Apple Silicon Mac with ${ramTotalGb} GB unified memory.`;
+    } else if (ramTotalGb >= 8) {
+      tier = "mid";
+      tierReason = `Apple Silicon Mac with ${ramTotalGb} GB unified memory.`;
+    } else {
+      tier = "low";
+      tierReason = `Apple Silicon Mac with ${ramTotalGb} GB unified memory.`;
+    }
+  } else {
+    if (gpuVramGb >= 12) {
+      tier = "high";
+      tierReason = `Discrete GPU with ${gpuVramGb} GB VRAM.`;
+    } else if (gpuVramGb >= 6) {
+      tier = "mid";
+      tierReason = `GPU with ${gpuVramGb} GB VRAM.`;
+    } else {
+      tier = "low";
+      tierReason = `GPU with ${gpuVramGb} GB VRAM and ${ramTotalGb} GB RAM.`;
+    }
+  }
+
+  // Recommended models catalog matching contract exactly
+  let recommended_models = [];
+  if (tier === "high") {
+    recommended_models = [
+      {
+        name: "Llama 3 8B Instruct (Q8_0)",
+        filename: "Meta-Llama-3-8B-Instruct-Q8_0.gguf",
+        approxSize: "8.5 GB",
+        url: "https://huggingface.co/QuantFactory/Meta-Llama-3-8B-Instruct-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q8_0.gguf",
+        notes: "Near-lossless precision for high quality responses.",
+        reason: tierReason
+      },
+      {
+        name: "Mistral 7B Instruct v0.3 (Q8_0)",
+        filename: "Mistral-7B-Instruct-v0.3.Q8_0.gguf",
+        approxSize: "7.7 GB",
+        url: "https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3.Q8_0.gguf",
+        notes: "Superb instruction-following and context window size.",
+        reason: tierReason
+      }
+    ];
+  } else if (tier === "mid") {
+    recommended_models = [
+      {
+        name: "Llama 3 8B Instruct (Q4_K_M)",
+        filename: "Meta-Llama-3-8B-Instruct-Q4_K_M.gguf",
+        approxSize: "4.8 GB",
+        url: "https://huggingface.co/QuantFactory/Meta-Llama-3-8B-Instruct-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_K_M.gguf",
+        notes: "Great balance of speed and performance.",
+        reason: tierReason
+      },
+      {
+        name: "Phi-3 Mini Instruct (Q4_K_M)",
+        filename: "Phi-3-mini-4k-instruct-q4.gguf",
+        approxSize: "2.2 GB",
+        url: "https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf",
+        notes: "Lightweight and fast, optimized by Microsoft.",
+        reason: tierReason
+      }
+    ];
+  } else {
+    recommended_models = [
+      {
+        name: "Qwen 2.5 Coder 0.5B Instruct (Q4_K_M)",
+        filename: "qwen2.5-coder-0.5b-instruct-q4_k_m.gguf",
+        approxSize: "491 MB",
+        url: "https://huggingface.co/Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-0.5b-instruct-q4_k_m.gguf",
+        notes: "Extremely fast, lightweight assistant, perfect for low RAM/VRAM machines.",
+        reason: tierReason
+      },
+      {
+        name: "SmolLM2 1.7B Instruct (Q4_K_M)",
+        filename: "smollm2-1.7b-instruct-q4_k_m.gguf",
+        approxSize: "1.1 GB",
+        url: "https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF/resolve/main/smollm2-1.7b-instruct-q4_k_m.gguf",
+        notes: "Excellent lightweight assistant with strong logic, reasoning, and prompt expansion capabilities.",
+        reason: tierReason
+      }
+    ];
+  }
+
   return {
     os_name: `${os.type()} ${os.release()}`,
     cpu_name: cpus[0]?.model || "Unavailable",
     cpu_cores_physical: Math.max(1, Math.round(cpus.length / 2)),
     cpu_cores_logical: cpus.length || 1,
-    ram_total_gb: roundGb(os.totalmem()),
+    ram_total_gb: ramTotalGb,
     gpu_name: gpu.name,
+    gpu_vram_gb: gpuVramGb,
+    recommended_models
   };
 }
 
@@ -381,13 +652,14 @@ function getTelemetry() {
   if (osPlatform === "darwin" && cachedMacRamUsedGb !== null) {
     ram_used_gb = cachedMacRamUsedGb;
   }
+  const gpu = getGpuInfo();
   return {
     cpu_usage: getCpuUsagePercent(),
     ram_used_gb,
     ram_total_gb: roundGb(os.totalmem()),
-    gpu_name: vram?.gpu_name || getGpuInfo().name,
+    gpu_name: vram?.gpu_name || gpu.name,
     vram_used_gb: vram?.vram_used_gb || 0,
-    vram_total_gb: vram?.vram_total_gb || 0,
+    vram_total_gb: vram?.vram_total_gb || gpu.vram_gb || 0,
   };
 }
 
@@ -1518,6 +1790,34 @@ async function startLlm(settings = {}) {
     backendBinary: path.basename(backend.path),
   };
 
+  let mmprojPath = null;
+  const lowerFilename = filename.toLowerCase();
+  const isMultimodal = lowerFilename.includes("llava") ||
+                       lowerFilename.includes("vision") ||
+                       lowerFilename.includes("qwen2vl") ||
+                       lowerFilename === "ggml-model-q4_k.gguf";
+
+  if (isMultimodal) {
+    if (settings.mmproj) {
+      const customProjPath = path.join(LLM_MODELS, path.basename(settings.mmproj));
+      if (fs.existsSync(customProjPath)) {
+        mmprojPath = customProjPath;
+      }
+    }
+    if (!mmprojPath) {
+      try {
+        const files = fs.readdirSync(LLM_MODELS);
+        const mmprojFile = files.find(file => {
+          const lower = file.toLowerCase();
+          return lower.endsWith(".gguf") && (lower === "mmproj-model-f16.gguf" || lower.includes("mmproj"));
+        });
+        if (mmprojFile) {
+          mmprojPath = path.join(LLM_MODELS, mmprojFile);
+        }
+      } catch (_) {}
+    }
+  }
+
   const args = [
     "--model", modelPath,
     "--host", "127.0.0.1",
@@ -1526,6 +1826,9 @@ async function startLlm(settings = {}) {
     "--threads", String(llmSettings.threads),
     "--n-gpu-layers", String(llmSettings.gpuLayers),
   ];
+  if (mmprojPath) {
+    args.push("--mmproj", mmprojPath);
+  }
   const spawnEnv = { ...process.env };
   const backendDir = path.dirname(backend.path);
   if (osPlatform === "linux") {
@@ -1959,7 +2262,7 @@ function describeDownloadHttpError(statusCode, url, headers = {}) {
   return `HTTP ${statusCode}`;
 }
 
-function startModelDownload(url, overrideFilename = null, targetDir = MODELS, kind = "image") {
+function startModelDownload(url, overrideFilename = null, targetDir = MODELS, kind = "image", redirectCount = 0) {
   if (downloadState.active && !overrideFilename) {
     console.log("  [download] Already downloading a model");
     return;
@@ -2035,6 +2338,10 @@ function startModelDownload(url, overrideFilename = null, targetDir = MODELS, ki
         failDownload("Redirect response did not include a Location header");
         return;
       }
+      if (redirectCount > 10) {
+        failDownload("Too many redirects");
+        return;
+      }
       console.log(`  [download] Redirected to ${redirectUrl}`);
       
       // Clean up redirected request to avoid triggering error handlers later
@@ -2045,7 +2352,7 @@ function startModelDownload(url, overrideFilename = null, targetDir = MODELS, ki
       try { fs.unlinkSync(tempPath); } catch (_) {}
       activeDownload = null;
       downloadState.active = false;
-      startModelDownload(redirectUrl, filename, targetDir, kind);
+      startModelDownload(redirectUrl, filename, targetDir, kind, redirectCount + 1);
       return;
     }
 

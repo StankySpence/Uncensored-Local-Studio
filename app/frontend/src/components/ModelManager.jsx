@@ -35,6 +35,7 @@ const MODEL_LIBRARY = [
         resolution: "1024x1024",
         notes: "Photorealistic SDXL model tuned for 4-8 step Lightning generation.",
         url: "https://huggingface.co/RunDiffusion/Juggernaut-XL-Lightning/resolve/main/Juggernaut_RunDiffusionPhoto2_Lightning_4Steps.safetensors",
+        recommendedTiers: ["Mid", "High"],
       },
       {
         name: "DreamShaper XL Lightning",
@@ -44,6 +45,7 @@ const MODEL_LIBRARY = [
         resolution: "1024x1024",
         notes: "All-around SDXL model for fantasy art, renders, illustration, and stylized images.",
         url: "https://huggingface.co/Lykon/dreamshaper-xl-lightning/resolve/main/DreamShaperXL_Lightning.safetensors",
+        recommendedTiers: ["Mid", "High"],
       },
     ],
   },
@@ -58,6 +60,7 @@ const MODEL_LIBRARY = [
         resolution: "512x512",
         notes: "General-purpose SD 1.5 model for illustration, anime, and semi-realistic portraits.",
         url: "https://huggingface.co/Lykon/DreamShaper/resolve/main/DreamShaper_8_pruned.safetensors",
+        recommendedTiers: ["Low"],
       },
       {
         name: "CyberRealistic V8",
@@ -67,6 +70,7 @@ const MODEL_LIBRARY = [
         resolution: "512x512",
         notes: "High-fidelity realism and photorealism in the SD 1.5 ecosystem.",
         url: "https://huggingface.co/cyberdelia/CyberRealistic/resolve/main/CyberRealistic_V8_FP16.safetensors",
+        recommendedTiers: ["Low"],
       },
       {
         name: "ReV Animated v1.2.2",
@@ -76,6 +80,7 @@ const MODEL_LIBRARY = [
         resolution: "512x512",
         notes: "Semi-realistic, 2.5D, anime, fantasy, and stylized digital art.",
         url: "https://huggingface.co/danbrown/RevAnimated-v1-2-2/resolve/main/rev-animated-v1-2-2.safetensors",
+        recommendedTiers: ["Low"],
       },
     ],
   },
@@ -93,6 +98,7 @@ const TEXT_MODEL_LIBRARY = [
         resolution: "N/A",
         notes: "Extremely fast, lightweight assistant, perfect for low RAM/VRAM machines.",
         url: "https://huggingface.co/Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-0.5b-instruct-q4_k_m.gguf",
+        recommendedTiers: ["Low"],
       },
       {
         name: "SmolLM2 1.7B Instruct Q4_K_M",
@@ -102,6 +108,42 @@ const TEXT_MODEL_LIBRARY = [
         resolution: "N/A",
         notes: "Excellent lightweight assistant with strong logic, reasoning, and prompt expansion capabilities.",
         url: "https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF/resolve/main/smollm2-1.7b-instruct-q4_k_m.gguf",
+        recommendedTiers: ["Low"],
+      },
+      {
+        name: "Qwen2.5-Coder-7B-Instruct",
+        filename: "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+        format: "GGUF",
+        size: "4.7 GB",
+        approxSize: "4.7 GB",
+        resolution: "N/A",
+        notes: "Highly intelligent coding and text assistant. Recommended for mid/high tier systems.",
+        url: "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+        recommendedTiers: ["Mid", "High"],
+      },
+      {
+        name: "Llama-3.1-8B-Instruct",
+        filename: "Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+        format: "GGUF",
+        size: "4.9 GB",
+        approxSize: "4.9 GB",
+        resolution: "N/A",
+        notes: "Excellent general-purpose text model. Recommended for high-tier systems.",
+        url: "https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+        recommendedTiers: ["High"],
+      },
+      {
+        name: "LLaVA 1.5 7B",
+        filename: "ggml-model-q4_k.gguf",
+        format: "GGUF",
+        size: "4.5 GB",
+        approxSize: "4.5 GB",
+        resolution: "N/A",
+        notes: "Multimodal model capable of understanding images. Downloads companion vision projector automatically.",
+        url: "https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/ggml-model-q4_k.gguf",
+        projectorUrl: "https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/mmproj-model-f16.gguf",
+        projectorFilename: "mmproj-model-f16.gguf",
+        recommendedTiers: ["Mid", "High"],
       },
     ],
   },
@@ -142,6 +184,20 @@ const COREML_MODEL_LIBRARY = [
     ],
   },
 ];
+
+const getHardwareTier = (specs) => {
+  if (!specs) return "Low";
+  const ram = Number(specs.ram_total_gb) || 0;
+  const vram = Number(specs.gpu_vram_gb) || 0;
+
+  if (vram >= 12 || (vram >= 8 && ram >= 32)) {
+    return "High";
+  } else if (vram >= 6 || ram >= 16) {
+    return "Mid";
+  } else {
+    return "Low";
+  }
+};
 
 function ModelManager({ 
   activeModel, 
@@ -288,32 +344,6 @@ function ModelManager({
     }
   };
 
-  const startProgressPolling = (modelId) => {
-    setDownloadingModelId(modelId);
-    
-    const interval = setInterval(async () => {
-      try {
-        const status = await getDownloadProgress();
-        if (status.active) {
-          setDownloadProgress(status.progress === -1 ? 0 : status.progress);
-          setDownloadSpeed(`${status.speed} • ETA ${status.eta}s`);
-        } else {
-          clearInterval(interval);
-          setDownloadingModelId(null);
-          if (status.error) {
-            if (!String(status.error).toLowerCase().includes("cancelled")) {
-              showAlert({ title: "Download Failed", message: status.error, danger: true });
-            }
-          } else {
-            fetchModels();
-          }
-        }
-      } catch (e) {
-        console.error("Polling error:", e);
-      }
-    }, 1000);
-  };
-
   const downloadByUrl = async (url, expectedFilename) => {
     if (downloadingModelId) return;
 
@@ -350,6 +380,40 @@ function ModelManager({
     } catch (err) {
       showAlert({ title: "Download Error", message: err.message, danger: true });
     }
+  };
+
+  const startProgressPolling = (modelId) => {
+    setDownloadingModelId(modelId);
+    
+    const interval = setInterval(async () => {
+      try {
+        const status = await getDownloadProgress();
+        if (status.active) {
+          setDownloadProgress(status.progress === -1 ? 0 : status.progress);
+          setDownloadSpeed(`${status.speed} • ETA ${status.eta}s`);
+        } else {
+          clearInterval(interval);
+          setDownloadingModelId(null);
+          if (status.error) {
+            if (!String(status.error).toLowerCase().includes("cancelled")) {
+              showAlert({ title: "Download Failed", message: status.error, danger: true });
+            }
+          } else {
+            fetchModels();
+            if (modelId === "ggml-model-q4_k.gguf") {
+              setTimeout(() => {
+                downloadByUrl(
+                  "https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/mmproj-model-f16.gguf",
+                  "mmproj-model-f16.gguf"
+                );
+              }, 500);
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Polling error:", e);
+      }
+    }, 1000);
   };
 
   const handleUrlDownloadSubmit = async (e) => {
@@ -809,6 +873,8 @@ function ModelManager({
         </button>
       </div>
 
+
+
       {/* Active Model Status Tonal Box */}
       {activeModelType === "image" && activeModel && (
         <div className="m3-card" style={{ borderLeft: "4px solid var(--md-sys-color-primary)", background: "var(--md-sys-color-primary-container)", color: "var(--md-sys-color-on-primary-container)" }}>
@@ -1006,10 +1072,27 @@ function ModelManager({
               {section.items.map((model) => {
                 const installed = modelNames.includes(model.filename);
                 const downloading = downloadingModelId === model.filename || downloadingModelId === `${model.filename}.zip`;
+                const systemTier = getHardwareTier(specs);
+                const isRecommended = model.recommendedTiers && model.recommendedTiers.includes(systemTier);
                 return (
                   <div key={model.filename} style={{ display: "flex", flexDirection: "column", gap: "10px", padding: "14px", background: "var(--md-sys-color-surface-variant)", border: "1px solid var(--md-sys-color-outline-variant)", borderRadius: "var(--md-shape-corner-medium)" }}>
                     <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                      <span style={{ fontWeight: 700 }}>{model.name}</span>
+                      <span style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                        {model.name}
+                        {isRecommended && (
+                          <span style={{ 
+                            fontSize: "0.68rem", 
+                            color: "#2e7d32", 
+                            background: "#e8f5e9", 
+                            padding: "2px 6px", 
+                            borderRadius: "4px", 
+                            fontWeight: "bold",
+                            border: "1px solid #c8e6c9" 
+                          }}>
+                            [Recommended Fit]
+                          </span>
+                        )}
+                      </span>
                       <span style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)" }}>
                         {model.format} • approx. {model.approxSize} {model.resolution !== "N/A" && `• ${model.resolution}`}
                       </span>

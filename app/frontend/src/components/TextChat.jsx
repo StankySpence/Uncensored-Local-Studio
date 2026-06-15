@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, LoaderCircle, Send, Trash2, Square, History, Plus } from "lucide-react";
+import { Bot, LoaderCircle, Send, Trash2, Square, History, Plus, Paperclip, X } from "lucide-react";
 import {
   chatWithLlm,
   getDownloadProgress,
@@ -29,6 +29,64 @@ function TextChat({ specs, showAlert, showConfirm, textSettings, setTextSettings
   const bottomRef = useRef(null);
   const completedDownloadRef = useRef("");
   const loadingModelRef = useRef(null);
+
+  const [attachments, setAttachments] = useState([]);
+  const fileInputRef = useRef(null);
+
+  const isImage = (file) => {
+    return /\.(jpe?g|png|webp)$/i.test(file.name) || file.type.startsWith("image/");
+  };
+
+  const isTextFile = (file) => {
+    return /\.(txt|md|csv|js|jsx|ts|tsx|py|json|css|html|java|cpp|c|h|rs|go|sh|bat|xml|yaml|yml)$/i.test(file.name) || file.type.startsWith("text/");
+  };
+
+  const handleFileChange = (e) => {
+    const files = Array.from(e.target.files);
+    if (!files || files.length === 0) return;
+
+    files.forEach((file) => {
+      if (isImage(file)) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          setAttachments((prev) => [
+            ...prev,
+            {
+              id: Math.random().toString(36).substring(7),
+              file,
+              type: "image",
+              name: file.name,
+              dataUrl: event.target.result,
+            },
+          ]);
+        };
+        reader.readAsDataURL(file);
+      } else if (isTextFile(file)) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          setAttachments((prev) => [
+            ...prev,
+            {
+              id: Math.random().toString(36).substring(7),
+              file,
+              type: "document",
+              name: file.name,
+              content: event.target.result,
+            },
+          ]);
+        };
+        reader.readAsText(file);
+      } else {
+        showAlert({
+          title: "Unsupported File",
+          message: `File "${file.name}" is not supported. Please select an image (JPEG, PNG, WEBP) or a text/code file.`,
+          danger: true,
+        });
+      }
+    });
+
+    e.target.value = "";
+  };
 
   useEffect(() => {
     loadingModelRef.current = loadingModel;
@@ -179,7 +237,12 @@ function TextChat({ specs, showAlert, showConfirm, textSettings, setTextSettings
       setSelectedModel(conv.model);
     }
     // Try to compute approximate token usage from messages
-    const total = conv.messages.reduce((sum, m) => sum + m.content.split(/\s+/).length, 0);
+    const total = conv.messages.reduce((sum, m) => {
+      const text = Array.isArray(m.content)
+        ? m.content.map(c => c.text || "").join(" ")
+        : (m.content || "");
+      return sum + text.split(/\s+/).length;
+    }, 0);
     setTokenUsage({
       prompt_tokens: Math.round(total * 0.7),
       completion_tokens: Math.round(total * 0.3),
@@ -204,7 +267,8 @@ function TextChat({ specs, showAlert, showConfirm, textSettings, setTextSettings
 
   const sendMessage = async () => {
     const text = input.trim();
-    if (!text || isBusy || !status.ready) return;
+    const hasAttachments = attachments.length > 0;
+    if ((!text && !hasAttachments) || isBusy || !status.ready) return;
 
     let convId = activeConversationId;
     let isNew = false;
@@ -214,12 +278,40 @@ function TextChat({ specs, showAlert, showConfirm, textSettings, setTextSettings
       isNew = true;
     }
 
-    const nextMessages = [...messages, { role: "user", content: text }];
+    // Delimited context blocks for document attachments
+    let documentContext = "";
+    attachments.filter(att => att.type === "document").forEach((att) => {
+      documentContext += `\n[Attached File: ${att.name}]\n${att.content}\n`;
+    });
+
+    const combinedText = documentContext ? `${text}\n\n${documentContext}`.trim() : text;
+    const imageAttachments = attachments.filter(att => att.type === "image");
+
+    let userMessageContent;
+    if (imageAttachments.length > 0) {
+      userMessageContent = [
+        {
+          type: "text",
+          text: combinedText
+        },
+        ...imageAttachments.map((img) => ({
+          type: "image_url",
+          image_url: {
+            url: img.dataUrl
+          }
+        }))
+      ];
+    } else {
+      userMessageContent = combinedText;
+    }
+
+    const nextMessages = [...messages, { role: "user", content: userMessageContent }];
     setMessages(nextMessages);
     setInput("");
     setIsBusy(true);
 
-    const firstTitle = isNew ? (text.slice(0, 26) + (text.length > 26 ? "..." : "")) : null;
+    const displayTitleText = text || (imageAttachments.length > 0 ? "Sent Image" : "Sent File");
+    const firstTitle = isNew ? (displayTitleText.slice(0, 26) + (displayTitleText.length > 26 ? "..." : "")) : null;
     saveConversationState(convId, nextMessages, selectedModel, firstTitle);
 
     try {
@@ -238,6 +330,9 @@ function TextChat({ specs, showAlert, showConfirm, textSettings, setTextSettings
         setTokenUsage(response.usage);
       }
       saveConversationState(convId, finalMessages, selectedModel);
+      
+      // Clean up attached files on success
+      setAttachments([]);
     } catch (err) {
       const finalMessages = [...nextMessages, { role: "assistant", content: `Error: ${err.message}`, error: true }];
       setMessages(finalMessages);
@@ -510,7 +605,30 @@ function TextChat({ specs, showAlert, showConfirm, textSettings, setTextSettings
               {messages.map((message, index) => (
                 <div key={`${message.role}-${index}`} className={`chat-message ${message.role} ${message.error ? "error" : ""}`}>
                   <strong>{message.role === "user" ? "You" : "Local AI"}</strong>
-                  <div>{message.content}</div>
+                  <div>
+                    {Array.isArray(message.content) ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                        {message.content.map((item, idx) => {
+                          if (item.type === "text") {
+                            return <span key={idx} style={{ whiteSpace: "pre-wrap" }}>{item.text}</span>;
+                          }
+                          if (item.type === "image_url") {
+                            return (
+                              <img 
+                                key={idx} 
+                                src={item.image_url.url} 
+                                alt="Attached image" 
+                                style={{ maxWidth: "240px", maxHeight: "180px", objectFit: "contain", borderRadius: "6px", marginTop: "4px" }} 
+                              />
+                            );
+                          }
+                          return null;
+                        })}
+                      </div>
+                    ) : (
+                      <span style={{ whiteSpace: "pre-wrap" }}>{message.content}</span>
+                    )}
+                  </div>
                 </div>
               ))}
               {isBusy && status.ready && <div className="chat-thinking"><LoaderCircle className="progress-spinner" size={16} /> Generating...</div>}
@@ -519,22 +637,99 @@ function TextChat({ specs, showAlert, showConfirm, textSettings, setTextSettings
           <div ref={bottomRef} />
         </div>
 
-        <div className="chat-composer">
-          <textarea
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                sendMessage();
-              }
-            }}
-            placeholder={status.ready ? "Message your local model..." : "Select and load a GGUF model above to begin"}
-            disabled={!status.ready || isBusy}
-          />
-          <button className="m3-btn m3-btn-filled" onClick={sendMessage} disabled={!input.trim() || !status.ready || isBusy}>
-            <Send size={17} /> Send
-          </button>
+        <div className="chat-composer" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+          {attachments.length > 0 && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", paddingBottom: "8px" }}>
+              {attachments.map((att) => (
+                <div key={att.id} style={{ 
+                  position: "relative", 
+                  display: "flex", 
+                  alignItems: "center", 
+                  gap: "6px", 
+                  padding: "6px 28px 6px 8px", 
+                  background: "var(--md-sys-color-surface-variant)", 
+                  border: "1px solid var(--border-color)", 
+                  borderRadius: "6px", 
+                  fontSize: "0.8rem",
+                  maxWidth: "200px"
+                }}>
+                  {att.type === "image" ? (
+                    <img src={att.dataUrl} alt={att.name} style={{ width: "24px", height: "24px", objectFit: "cover", borderRadius: "3px" }} />
+                  ) : (
+                    <span style={{ fontWeight: 600 }}>📄</span>
+                  )}
+                  <span style={{ 
+                    whiteSpace: "nowrap", 
+                    overflow: "hidden", 
+                    textOverflow: "ellipsis", 
+                    color: "var(--md-sys-color-on-surface-variant)" 
+                  }} title={att.name}>
+                    {att.name}
+                  </span>
+                  <button 
+                    onClick={() => setAttachments(prev => prev.filter(item => item.id !== att.id))}
+                    style={{
+                      position: "absolute",
+                      right: "4px",
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      background: "none",
+                      border: "none",
+                      color: "var(--md-sys-color-error)",
+                      cursor: "pointer",
+                      padding: "2px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center"
+                    }}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: "10px", width: "100%" }}>
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              style={{ display: "none" }} 
+              multiple 
+              onChange={handleFileChange} 
+            />
+            <button 
+              className="m3-btn m3-btn-tonal" 
+              onClick={() => fileInputRef.current?.click()} 
+              style={{ padding: "0 12px", height: "48px", display: "flex", alignItems: "center", justifyContent: "center" }}
+              disabled={!status.ready || isBusy}
+              title="Attach files or images"
+            >
+              <Paperclip size={17} />
+            </button>
+
+            <textarea
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  sendMessage();
+                }
+              }}
+              placeholder={status.ready ? "Message your local model..." : "Select and load a GGUF model above to begin"}
+              disabled={!status.ready || isBusy}
+              style={{ flex: 1 }}
+            />
+            <button 
+              className="m3-btn m3-btn-filled" 
+              onClick={sendMessage} 
+              disabled={(!input.trim() && attachments.length === 0) || !status.ready || isBusy}
+              style={{ height: "48px" }}
+            >
+              <Send size={17} /> Send
+            </button>
+          </div>
         </div>
       </section>
     </div>
