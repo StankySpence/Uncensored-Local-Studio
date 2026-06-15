@@ -2181,6 +2181,7 @@ async function startLlm(settings = {}) {
     backendMode: backend.mode,
     backendBinary: path.basename(backend.path),
     enableThinking: settings.enableThinking !== false,
+    supportsThinking: /deepseek|qwen3|gemma-4|gemma4|think|r1|e2b|reasoning/i.test(filename),
   };
 
   let mmprojPath = null;

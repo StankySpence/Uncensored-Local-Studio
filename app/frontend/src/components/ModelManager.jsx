@@ -398,6 +398,7 @@ function ModelManager({
           backendMode: sdStatus.settings?.backendMode || sdStatus.loading?.backendMode || "",
           backendBinary: sdStatus.settings?.backendBinary || sdStatus.loading?.backendBinary || "",
           backendDevice: sdStatus.settings?.backendDevice || sdStatus.loading?.device || "",
+          llmBackendMode: llmStatus.settings?.backendMode || llmStatus.settings?.backendBinary || "",
         });
         
         if (llmStatus.ready) {
@@ -1002,6 +1003,13 @@ function ModelManager({
               <p style={{ fontSize: "0.85rem", marginTop: "2px", opacity: 0.9 }}>
                 The local C++ llama.cpp server is running. Chat requests can be sent via the Text Chat interface.
               </p>
+              {backendInfo.llmBackendMode && (
+                <div style={{ display: "flex", gap: "8px", marginTop: "8px", flexWrap: "wrap" }}>
+                  <span className="status-chip" style={{ cursor: "default", background: "rgba(255,255,255,0.15)", color: "inherit", border: "1px solid rgba(255,255,255,0.2)" }}>
+                    <span>{backendInfo.llmBackendMode}</span>
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         </div>

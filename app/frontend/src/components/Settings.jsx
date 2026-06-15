@@ -1,6 +1,6 @@
-import React, { memo, useEffect } from "react";
+import React, { memo, useEffect, useState } from "react";
 import { Crop, Sliders, Cpu, Info, MessageSquare, SlidersHorizontal, Zap } from "lucide-react";
-import { stopServer, formatBytes } from "../services/api";
+import { stopServer, formatBytes, getLlmStatus } from "../services/api";
 
 const ASPECT_RATIOS = [
   { id: "1:1", label: "1:1 Square", width: 512, height: 512, sdxl_width: 1024, sdxl_height: 1024, desc: "Social posts & avatars" },
@@ -54,6 +54,26 @@ function Settings({
   ];
   const cleanupBytes = (cleanupItems || []).reduce((sum, item) => sum + Number(item.sizeBytes || 0), 0);
   const showReadinessPanel = Boolean(health && (readinessIssues.length > 0 || (cleanupItems && cleanupItems.length > 0)));
+
+  const [llmStatus, setLlmStatus] = useState({ ready: false, settings: {} });
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchLlmStatus = async () => {
+      try {
+        const status = await getLlmStatus();
+        if (!cancelled) setLlmStatus(status);
+      } catch (_) {}
+    };
+    fetchLlmStatus();
+    const interval = setInterval(fetchLlmStatus, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  const supportsThinking = Boolean(llmStatus.ready && llmStatus.settings?.supportsThinking);
 
   useEffect(() => {
     if (isOpenVinoNpu && constraints.steps > 8) {
@@ -523,7 +543,8 @@ function Settings({
                 </span>
               </div>
 
-              {/* Show Thinking Process toggle */}
+              {/* Show Thinking Process toggle - only for models that support it */}
+              {supportsThinking && (
               <div style={{ marginTop: "16px" }}>
                 <label style={{ display: "flex", alignItems: "flex-start", gap: "10px", cursor: "pointer", fontSize: "0.85rem" }}>
                   <input
@@ -546,6 +567,12 @@ function Settings({
                   </div>
                 </label>
               </div>
+              )}
+              {!supportsThinking && llmStatus.ready && (
+                <div style={{ marginTop: "16px", padding: "10px 14px", background: "rgba(251, 191, 36, 0.08)", border: "1px dashed rgb(251, 191, 36)", borderRadius: "8px", fontSize: "0.75rem", color: "var(--md-sys-color-on-surface)", lineHeight: "1.45" }}>
+                  <strong>Thinking not supported.</strong> The loaded model does not support reasoning/thinking output. DeepThink is only available for models like DeepSeek-R1, Qwen3, Gemma-4-E2B, and other reasoning-capable models.
+                </div>
+              )}
 
               {/* Temperature slider */}
               <div className="m3-slider-group" style={{ marginTop: "16px" }}>

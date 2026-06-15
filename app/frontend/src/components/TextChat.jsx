@@ -147,6 +147,7 @@ function TextChat({
   const [attachments, setAttachments] = useState([]);
   const fileInputRef = useRef(null);
   const supportsVision = Boolean(status.ready && status.settings?.supportsVision);
+  const supportsThinking = Boolean(status.ready && status.settings?.supportsThinking);
 
   const isImage = (file) => {
     return /\.(jpe?g|png|webp)$/i.test(file.name) || file.type.startsWith("image/");
@@ -888,7 +889,7 @@ function TextChat({
                 rows={1}
               />
 
-              {status.ready && (
+              {status.ready && supportsThinking && (
                 <button
                   className={`chat-composer-deepthink-btn ${textSettings.enableThinking !== false ? "active" : ""}`}
                   onClick={() => {
