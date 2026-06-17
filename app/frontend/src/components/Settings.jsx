@@ -425,6 +425,59 @@ function Settings({
             </div>
           </div>
 
+          {/* Hardware Tier Badge */}
+          {specs?.tier && (
+            <div className="m3-card" style={{ 
+              background: specs.tier === "high" ? "rgba(34, 197, 94, 0.08)" : 
+                         specs.tier === "mid" ? "rgba(59, 130, 246, 0.08)" : 
+                         "rgba(251, 191, 36, 0.08)",
+              border: `1px solid ${specs.tier === "high" ? "rgb(34, 197, 94)" : 
+                                      specs.tier === "mid" ? "rgb(59, 130, 246)" : 
+                                      "rgb(251, 191, 36)"}`,
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <Cpu size={20} style={{ 
+                  color: specs.tier === "high" ? "rgb(34, 197, 94)" : 
+                         specs.tier === "mid" ? "rgb(59, 130, 246)" : 
+                         "rgb(251, 191, 36)" 
+                }} />
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: "0.9rem" }}>
+                    {specs.tier === "high" ? "🚀 High-End PC" : 
+                     specs.tier === "mid" ? "⚖️ Balanced PC" : 
+                     "🥔 Potato PC"}
+                  </div>
+                  <div style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", marginTop: "2px" }}>
+                    {specs.cpu_name} • {specs.cpu_cores_physical} cores • {specs.ram_total_gb}GB RAM
+                    {specs.gpu_name && specs.gpu_name !== "Loading..." && ` • ${specs.gpu_name}`}
+                    {specs.gpu_vram_gb > 0 && ` • ${specs.gpu_vram_gb}GB VRAM`}
+                  </div>
+                </div>
+              </div>
+              {specs.recommended_text_settings && (
+                <div style={{ marginTop: "10px", paddingTop: "10px", borderTop: "1px dashed var(--border-color)" }}>
+                  <div style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", marginBottom: "4px" }}>
+                    Recommended text settings:
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                    <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: "4px", background: "var(--md-sys-color-surface-variant)" }}>
+                      Ctx: {specs.recommended_text_settings.contextSize}
+                    </span>
+                    <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: "4px", background: "var(--md-sys-color-surface-variant)" }}>
+                      Threads: {specs.recommended_text_settings.threads}
+                    </span>
+                    <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: "4px", background: "var(--md-sys-color-surface-variant)" }}>
+                      KV: {specs.recommended_text_settings.cacheTypeK}
+                    </span>
+                    <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: "4px", background: "var(--md-sys-color-surface-variant)" }}>
+                      Batch: {specs.recommended_text_settings.batchSize}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Card 3: Image Memory Optimizations */}
           <div className="m3-card">
             <h3 className="m3-card-title">
