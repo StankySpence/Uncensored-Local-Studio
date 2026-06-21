@@ -569,7 +569,7 @@ body {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 14px 14px 8px;
+  padding: 14px 12px 8px;
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -733,18 +733,18 @@ body {
 .chat-bubble-wrap {
   display: flex;
   flex-direction: column;
-  max-width: min(1180px, 92%);
+  max-width: min(1440px, calc(100% - 42px));
   gap: 5px;
 }
 
 .chat-message-row.user .chat-bubble-wrap {
   align-items: flex-end;
-  max-width: min(780px, 70%);
+  max-width: min(920px, 72%);
 }
 
 .chat-message-row.ai .chat-bubble-wrap {
   align-items: flex-start;
-  max-width: min(1280px, 92%);
+  max-width: min(1520px, calc(100% - 42px));
 }
 
 .chat-bubble {
@@ -762,6 +762,7 @@ body {
   color: var(--md-sys-color-on-surface);
   border: 1px solid var(--border-color);
   border-bottom-left-radius: 4px;
+  max-width: 100%;
 }
 
 /* User bubble */

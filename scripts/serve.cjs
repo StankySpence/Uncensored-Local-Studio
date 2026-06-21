@@ -20,6 +20,7 @@ const llmHttpAgent = new http.Agent({
 
 const HF_MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
 const hfModelCache = new Map();
+const hfProjectorCache = new Map();
 
 function readPort(value, fallback) {
   const port = parseInt(value, 10);
@@ -2137,6 +2138,50 @@ function selectMmprojFile(siblings = [], modelFilename = "") {
   });
   scored.sort((a, b) => b.score - a.score || a.name.length - b.name.length);
   return scored[0]?.name || "";
+}
+
+function parseHuggingFaceResolveUrl(fileUrl) {
+  try {
+    const parsed = new URL(fileUrl);
+    if (!/^(?:www\.)?huggingface\.co$/i.test(parsed.hostname)) return null;
+    const parts = parsed.pathname.split("/").filter(Boolean);
+    const resolveIndex = parts.findIndex((part) => part === "resolve" || part === "blob");
+    if (resolveIndex < 2 || resolveIndex + 2 >= parts.length) return null;
+    const repoId = `${decodeURIComponent(parts[0])}/${decodeURIComponent(parts[1])}`;
+    const revision = decodeURIComponent(parts[resolveIndex + 1] || "main");
+    const repositoryFilename = parts.slice(resolveIndex + 2).map(decodeURIComponent).join("/");
+    return { repoId, revision, repositoryFilename };
+  } catch (_) {
+    return null;
+  }
+}
+
+async function resolveHuggingFaceProjector(fileUrl, localModelFilename = "") {
+  const parsed = parseHuggingFaceResolveUrl(fileUrl);
+  if (!parsed) return null;
+
+  const cacheKey = `${parsed.repoId}|${parsed.revision}|${parsed.repositoryFilename}`;
+  const cached = hfProjectorCache.get(cacheKey);
+  if (cached && Date.now() - cached.createdAt < HF_MODEL_CACHE_TTL_MS) return cached.projector;
+
+  try {
+    const treeUrl = `https://huggingface.co/api/models/${parsed.repoId}/tree/${encodeURIComponent(parsed.revision)}?recursive=true`;
+    const tree = await requestHttpsJson(treeUrl);
+    const projectorRepositoryFilename = selectMmprojFile(tree, parsed.repositoryFilename || localModelFilename);
+    const projector = projectorRepositoryFilename
+      ? {
+          url: `https://huggingface.co/${parsed.repoId}/resolve/${encodeURIComponent(parsed.revision)}/${projectorRepositoryFilename.split("/").map(encodeURIComponent).join("/")}`,
+          filename: `${parsed.repoId.replace(/\//g, "--")}--${path.basename(projectorRepositoryFilename)}`,
+          repositoryFilename: projectorRepositoryFilename,
+        }
+      : null;
+    hfProjectorCache.set(cacheKey, { createdAt: Date.now(), projector });
+    return projector;
+  } catch (err) {
+    console.warn(`  [download] Could not resolve vision projector for ${parsed.repoId}: ${err.message || err}`);
+    hfProjectorCache.set(cacheKey, { createdAt: Date.now(), projector: null });
+    return null;
+  }
 }
 
 function classifyHuggingFaceModel(model, filename) {
@@ -4340,8 +4385,17 @@ async function getLlmfitRecommendations(useCase = "chat", limit = 10) {
       if (!filename.toLowerCase().endsWith(".gguf")) {
         return json(res, 400, { ok: false, error: "Text model URL must point to a .gguf file." });
       }
+      const projector = body.projectorUrl && body.projectorFilename
+        ? { url: String(body.projectorUrl), filename: path.basename(String(body.projectorFilename)) }
+        : await resolveHuggingFaceProjector(directUrl, filename);
       startModelDownload(directUrl, filename, LLM_MODELS, "text");
-      return json(res, 200, { ok: true, message: "Text model download started", filename });
+      return json(res, 200, {
+        ok: true,
+        message: "Text model download started",
+        filename,
+        projectorUrl: projector?.url || "",
+        projectorFilename: projector?.filename || "",
+      });
     } catch (err) {
       return json(res, 400, { ok: false, error: err.message || String(err) });
     }

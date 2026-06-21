@@ -17,8 +17,21 @@ const processMessageContent = (rawText, apiReasoning = "", enableThinking = true
     return { content, reasoning };
   }
 
+  const cleanReasoningControlTags = (value) => String(value || "")
+    .replace(/<\|channel\|>thought/g, "")
+    .replace(/<\|channel\|>model/g, "")
+    .replace(/<\|turn\|>model/g, "")
+    .replace(/<\|im_start\|>model/g, "")
+    .replace(/<\|think\|>|<\|thought\|>|<thinking>|<thought>/g, "")
+    .replace(/<\|\/think\|>|<\|\/thought\|>|<\/thinking>|<\/thought>/g, "")
+    .trim();
+
   const startTags = ["<|channel|>thought", "<|think|>", "<|thought|>", "<thinking>", "<thought>"];
   const endTags = ["<|channel|>model", "<|turn>model", "<|im_start|>model", "</thinking>", "</thought>", "<|/think|>", "<|/thought|>"];
+
+  if (!enableThinking) {
+    return { content: cleanReasoningControlTags(rawText), reasoning: "" };
+  }
 
   let startIdx = -1;
   let matchedStartTag = "";
@@ -48,10 +61,7 @@ const processMessageContent = (rawText, apiReasoning = "", enableThinking = true
       const actualEndIdxInRaw = startIdx + matchedStartTag.length + endIdx;
       const extractedReasoning = rawText.substring(startIdx + matchedStartTag.length, actualEndIdxInRaw).trim();
       
-      // Only extract reasoning if thinking is enabled
-      if (enableThinking) {
-        reasoning = (reasoning + "\n" + extractedReasoning).trim();
-      }
+      reasoning = (reasoning + "\n" + extractedReasoning).trim();
       
       const afterEndText = rawText.substring(actualEndIdxInRaw + matchedEndTag.length);
       content = (rawText.substring(0, startIdx) + afterEndText).trim();
@@ -59,16 +69,18 @@ const processMessageContent = (rawText, apiReasoning = "", enableThinking = true
       return processMessageContent(content, reasoning, enableThinking);
     } else {
       const extractedReasoning = rawText.substring(startIdx + matchedStartTag.length).trim();
-      // Only extract reasoning if thinking is enabled
-      if (enableThinking) {
-        reasoning = (reasoning + "\n" + extractedReasoning).trim();
-      }
+      reasoning = (reasoning + "\n" + extractedReasoning).trim();
       content = rawText.substring(0, startIdx).trim();
     }
   }
 
   return { content, reasoning };
 };
+
+const messageContainsImage = (message) => (
+  Array.isArray(message?.content) &&
+  message.content.some((item) => item?.type === "image_url" && item?.image_url?.url)
+);
 
 function ThinkingBlock({ reasoning, isComplete, thinkingDuration }) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -563,8 +575,10 @@ function TextChat({
     });
 
     const imageAttachments = attachments.filter(att => att.type === "image");
-    const visionInstruction = imageAttachments.length > 0
-      ? "For attached images: answer in natural language, describe the actual image content, and read visible text carefully when relevant. Do not output raw JSON, bounding boxes, OCR layout objects, or detection labels unless the user explicitly asks for that format."
+    const conversationHasImage = messages.some(messageContainsImage);
+    const requestHasImage = imageAttachments.length > 0 || conversationHasImage;
+    const visionInstruction = requestHasImage
+      ? "For images in this conversation: answer in natural language, describe the actual image content, and read visible text carefully when relevant. If the user asks a follow-up like \"what is this\" or \"explain\", treat it as referring to the most recent image unless they say otherwise. Do not output raw JSON, arrays, bounding boxes, OCR layout objects, UI class names, or detection labels unless the user explicitly asks for that format."
       : "";
     const requestText = imageAttachments.length > 0
       ? (text && text !== "?" ? text : "Describe what is visible in the image.")
@@ -625,7 +639,7 @@ function TextChat({
     setMessages([...nextMessages, {
       role: "assistant",
       content: "",
-      generationStats: { status: "starting", tokens: 0, tokensPerSecond: 0, seconds: 0, vision: imageAttachments.length > 0 },
+      generationStats: { status: "starting", tokens: 0, tokensPerSecond: 0, seconds: 0, vision: requestHasImage },
     }]);
 
     const controller = new AbortController();
@@ -654,6 +668,7 @@ function TextChat({
       });
 
       let assistantText = "";
+      let rawAssistantText = "";
       let assistantReasoning = "";
       let streamedTokens = 0;
       let firstTokenAt = null;
@@ -687,6 +702,7 @@ function TextChat({
           ? Math.max(0.05, (now - firstTokenAt) / 1000)
           : Math.max(0.05, (now - requestStartedAt) / 1000);
         
+        rawAssistantText = fullText;
         const processed = processMessageContent(fullText, fullReasoning, textSettings?.enableThinking !== false);
         assistantText = processed.content;
         assistantReasoning = processed.reasoning;
@@ -767,7 +783,7 @@ function TextChat({
         truncated: response.finishReason === "length",
       };
       
-      const processed = processMessageContent(assistantText, response.reasoningContent || assistantReasoning, textSettings?.enableThinking !== false);
+      const processed = processMessageContent(response.content || rawAssistantText || assistantText, response.reasoningContent || assistantReasoning, textSettings?.enableThinking !== false);
       const finalMessages = [...nextMessages, {
         role: "assistant",
         content: processed.content,

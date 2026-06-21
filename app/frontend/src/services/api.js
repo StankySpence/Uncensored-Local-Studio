@@ -436,6 +436,23 @@ export async function streamChatWithLlm(messages, options = {}, onToken = () => 
   let timings = null;
   let finishReason = null;
 
+  const normalizeTextDelta = (value) => {
+    if (typeof value === "string") return value;
+    if (Array.isArray(value)) {
+      return value.map((item) => {
+        if (typeof item === "string") return item;
+        if (typeof item?.text === "string") return item.text;
+        if (typeof item?.content === "string") return item.content;
+        return "";
+      }).join("");
+    }
+    if (value && typeof value === "object") {
+      if (typeof value.text === "string") return value.text;
+      if (typeof value.content === "string") return value.content;
+    }
+    return "";
+  };
+
   const consumeEvent = (eventText) => {
     try {
       const data = eventText
@@ -448,8 +465,20 @@ export async function streamChatWithLlm(messages, options = {}, onToken = () => 
 
       const parsed = JSON.parse(data);
       const choice = parsed.choices?.[0];
-      const token = choice?.delta?.content || "";
-      const reasoningToken = choice?.delta?.reasoning_content || "";
+      const token = normalizeTextDelta(
+        choice?.delta?.content ??
+        choice?.message?.content ??
+        choice?.text ??
+        parsed.content ??
+        parsed.response
+      );
+      const reasoningToken = normalizeTextDelta(
+        choice?.delta?.reasoning_content ??
+        choice?.delta?.reasoning ??
+        choice?.delta?.thinking ??
+        choice?.message?.reasoning_content ??
+        parsed.reasoning_content
+      );
       if (choice?.finish_reason) finishReason = choice.finish_reason;
 
       if (token || reasoningToken) {
@@ -487,11 +516,16 @@ export async function streamChatWithLlm(messages, options = {}, onToken = () => 
   return { content, reasoningContent, usage, timings, finishReason };
 }
 
-export async function downloadLlmModel(url, filename = null) {
+export async function downloadLlmModel(url, filename = null, companion = null) {
   const res = await fetch("/api/llm/download-model", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url, filename }),
+    body: JSON.stringify({
+      url,
+      filename,
+      projectorUrl: companion?.url || "",
+      projectorFilename: companion?.filename || "",
+    }),
   });
   return await readJsonResponse(res, "The local server returned an invalid text download response.");
 }

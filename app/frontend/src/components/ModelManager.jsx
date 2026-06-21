@@ -461,9 +461,15 @@ function ModelManager({
       if (activeModelType === "image") {
         res = await downloadModel(url);
       } else {
-        res = await downloadLlmModel(url, expectedFilename);
+        res = await downloadLlmModel(url, expectedFilename, companion);
       }
       if (res && res.ok) {
+        if (!companion && res.projectorUrl && res.projectorFilename) {
+          pendingCompanionDownloadRef.current = {
+            url: res.projectorUrl,
+            filename: res.projectorFilename,
+          };
+        }
         startProgressPolling(expectedFilename);
       } else {
         pendingCompanionDownloadRef.current = null;
