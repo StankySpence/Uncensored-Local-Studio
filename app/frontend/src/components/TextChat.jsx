@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Bot, LoaderCircle, Send, Trash2, Square, History, Paperclip, X, ChevronDown } from "lucide-react";
 import {
   getDownloadProgress,
@@ -71,7 +71,7 @@ const processMessageContent = (rawText, apiReasoning = "", enableThinking = true
 };
 
 function ThinkingBlock({ reasoning, isComplete, thinkingDuration }) {
-  const [isExpanded, setIsExpanded] = useState(!isComplete);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   useEffect(() => {
     if (isComplete) {
@@ -152,10 +152,12 @@ function TextChat({
   };
   
   const bottomRef = useRef(null);
+  const textareaRef = useRef(null);
   const completedDownloadRef = useRef("");
   const loadingModelRef = useRef(null);
   const chatMessagesRef = useRef(null);
   const prevMessagesLengthRef = useRef(0);
+  const followGenerationRef = useRef(false);
   const abortControllerRef = useRef(null);
   // rAF batching: accumulate token updates and flush once per frame
   const tokenBufferRef = useRef(null);
@@ -167,6 +169,19 @@ function TextChat({
   const fileInputRef = useRef(null);
   const supportsVision = Boolean(status.ready && status.settings?.supportsVision);
   const supportsThinking = Boolean(status.ready && status.settings?.supportsThinking);
+
+  const resizeComposerInput = useCallback(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    const maxHeight = 104;
+    textarea.style.height = "auto";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+  }, []);
+
+  useLayoutEffect(() => {
+    resizeComposerInput();
+  }, [input, resizeComposerInput]);
 
   const isImage = (file) => {
     return /\.(jpe?g|png|webp)$/i.test(file.name) || file.type.startsWith("image/");
@@ -396,7 +411,7 @@ function TextChat({
     const lastMessage = messages[len - 1];
     const isNewUserMessage = len > prevLen && lastMessage?.role === "user";
 
-    if (isNewUserMessage) {
+    if (isNewUserMessage || followGenerationRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     } else {
       const threshold = 150;
@@ -518,6 +533,7 @@ function TextChat({
     }
 
     const nextMessages = [...messages, { role: "user", content: userMessageContent }];
+    followGenerationRef.current = true;
     setMessages(nextMessages);
     setInput("");
     setIsBusy(true);
@@ -722,6 +738,9 @@ function TextChat({
     } finally {
       setIsBusy(false);
       abortControllerRef.current = null;
+      setTimeout(() => {
+        followGenerationRef.current = false;
+      }, 250);
     }
   };
 
@@ -734,16 +753,16 @@ function TextChat({
   };
 
   return (
-    <div className="text-chat-layout" style={{ display: "flex", padding: "20px", height: "100%", width: "100%", boxSizing: "border-box", overflow: "hidden" }}>
+    <div className="text-chat-layout" style={{ display: "flex", height: "100%", width: "100%", boxSizing: "border-box", overflow: "hidden" }}>
       <section className="text-chat-main" style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column" }}>
         {/* ─── Header ─────────────────────────────────────────── */}
-        <div className="text-chat-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+        <div className="text-chat-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0, flex: 1 }}>
             <button
               onClick={() => setShowHistory(!showHistory)}
               className="m3-btn m3-btn-tonal"
               style={{
-                height: "38px", width: "38px", padding: 0,
+                height: "34px", width: "34px", padding: 0,
                 display: "flex", alignItems: "center", justifyContent: "center",
                 borderRadius: "var(--md-shape-corner-medium)", cursor: "pointer",
                 background: showHistory ? "var(--md-sys-color-primary-container)" : "var(--md-sys-color-surface-variant)",
@@ -752,7 +771,7 @@ function TextChat({
               }}
               title="Toggle Chat History"
             >
-              <History size={18} />
+              <History size={17} />
             </button>
 
             <select
@@ -760,12 +779,12 @@ function TextChat({
               onChange={(e) => handleModelChange(e.target.value)}
               disabled={isBusy}
               style={{
-                fontSize: "0.95rem", fontWeight: "600",
+                fontSize: "0.9rem", fontWeight: "600",
                 border: "1px solid var(--border-color)",
                 borderRadius: "var(--md-shape-corner-medium)",
                 background: "var(--md-sys-color-surface-variant)",
                 color: "var(--md-sys-color-on-surface)",
-                padding: "8px 16px", outline: "none", cursor: "pointer", minWidth: "220px"
+                padding: "6px 12px", outline: "none", cursor: "pointer", minWidth: "180px", flex: 1
               }}
             >
               <option value="">No model loaded (Select GGUF)</option>
@@ -795,16 +814,16 @@ function TextChat({
             )}
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "20px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", flexShrink: 0 }}>
             {/* Context gauge */}
             {(() => {
               const maxTokens = status.settings?.contextSize || 4096;
               const used = tokenUsage.total_tokens || 0;
               const percent = Math.min(100, Math.round((used / maxTokens) * 100));
               return (
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }} title={`Context Used: ${used} / ${maxTokens} tokens`}>
-                  <div style={{ position: "relative", width: "40px", height: "40px", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                    <svg width="40" height="40" viewBox="0 0 40 40">
+                <div style={{ display: "flex", alignItems: "center", gap: "7px" }} title={`Context Used: ${used} / ${maxTokens} tokens`}>
+                  <div style={{ position: "relative", width: "32px", height: "32px", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <svg width="32" height="32" viewBox="0 0 40 40">
                       <circle cx="20" cy="20" r="16" stroke="var(--border-color)" strokeWidth="3" fill="transparent" />
                       <circle cx="20" cy="20" r="16" stroke="var(--md-sys-color-primary)" strokeWidth="3" fill="transparent"
                         strokeDasharray={2 * Math.PI * 16}
@@ -814,12 +833,12 @@ function TextChat({
                       />
                     </svg>
                     <div style={{ position: "absolute", textAlign: "center" }}>
-                      <span style={{ fontSize: "0.65rem", fontWeight: "700" }}>{percent}%</span>
+                      <span style={{ fontSize: "0.58rem", fontWeight: "700" }}>{percent}%</span>
                     </div>
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.2 }}>
-                    <span style={{ fontSize: "0.65rem", color: "var(--md-sys-color-outline)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>Context</span>
-                    <span style={{ fontSize: "0.8rem", fontWeight: "600", color: "var(--md-sys-color-on-surface)" }}>{used} / {maxTokens}</span>
+                    <span style={{ fontSize: "0.6rem", color: "var(--md-sys-color-outline)", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>Context</span>
+                    <span style={{ fontSize: "0.76rem", fontWeight: "600", color: "var(--md-sys-color-on-surface)" }}>{used} / {maxTokens}</span>
                   </div>
                 </div>
               );
@@ -827,18 +846,27 @@ function TextChat({
 
             <button
               className="m3-btn m3-btn-outlined"
-              style={{ height: "36px", padding: "0 12px", display: "flex", alignItems: "center", gap: "6px", fontSize: "0.82rem", borderRadius: "var(--md-shape-corner-medium)" }}
+              style={{ height: "32px", padding: "0 10px", display: "flex", alignItems: "center", gap: "6px", fontSize: "0.78rem", borderRadius: "var(--md-shape-corner-medium)" }}
               onClick={handleClearChat}
               disabled={messages.length === 0}
             >
-              <Trash2 size={15} />
+              <Trash2 size={14} />
               <span>Clear</span>
             </button>
           </div>
         </div>
 
         {/* ─── Messages area ──────────────────────────────────── */}
-        <div ref={chatMessagesRef} className="chat-messages">
+        <div
+          ref={chatMessagesRef}
+          className="chat-messages"
+          onWheel={() => {
+            if (isBusy) followGenerationRef.current = false;
+          }}
+          onTouchMove={() => {
+            if (isBusy) followGenerationRef.current = false;
+          }}
+        >
           {loadingModel ? (
             <div className="chat-empty" style={{ maxWidth: "480px", margin: "auto", textAlign: "center", padding: "60px 20px" }}>
               <LoaderCircle className="progress-spinner" size={48} style={{ color: "var(--md-sys-color-primary)", marginBottom: "16px" }} />
@@ -1012,14 +1040,15 @@ function TextChat({
               className="chat-composer-attach-btn"
               onClick={() => fileInputRef.current?.click()}
               disabled={!supportsVision || isBusy}
-              title={supportsVision ? "Attach files or images" : "Image attachment requires a vision model with an mmproj file"}
+              title={supportsVision ? "Attach files or images" : "Image attachment requires a vision model or matching projector"}
               style={{ marginBottom: "2px" }}
             >
               <Paperclip size={17} />
             </button>
 
-            <div className="chat-composer-middle" style={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px" }}>
+            <div className="chat-composer-middle" style={{ flex: 1, display: "flex", minWidth: 0 }}>
               <textarea
+                ref={textareaRef}
                 className="chat-composer-textarea"
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
@@ -1033,40 +1062,22 @@ function TextChat({
                 disabled={!status.ready || isBusy}
                 rows={1}
               />
-
-              {status.ready && supportsThinking && (
-                <button
-                  className={`chat-composer-deepthink-btn ${textSettings.enableThinking !== false ? "active" : ""}`}
-                  onClick={handleThinkingToggle}
-                  title={textSettings.enableThinking !== false ? "Disable DeepThink reasoning" : "Enable DeepThink reasoning"}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                    padding: "6px 12px",
-                    borderRadius: "14px",
-                    border: "1px solid var(--border-color)",
-                    background: textSettings.enableThinking !== false ? "rgba(99, 102, 241, 0.15)" : "transparent",
-                    color: textSettings.enableThinking !== false ? "var(--md-sys-color-primary)" : "var(--md-sys-color-outline)",
-                    fontFamily: "Outfit, sans-serif",
-                    fontSize: "0.82rem",
-                    fontWeight: "600",
-                    cursor: "pointer",
-                    alignSelf: "flex-start",
-                    marginBottom: "4px",
-                    transition: "all 0.2s ease"
-                  }}
-                >
-                  {/* SVG Atom Icon */}
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ transition: "transform 0.5s ease" }} className={textSettings.enableThinking !== false ? "rotate-anim" : ""}>
-                    <circle cx="12" cy="12" r="3" />
-                    <ellipse cx="12" cy="12" rx="3" ry="9" />
-                    <ellipse cx="12" cy="12" rx="9" ry="3" />
-                  </svg>
-                  DeepThink
-                </button>
-              )}
             </div>
+
+            {status.ready && supportsThinking && (
+              <button
+                className={`chat-composer-deepthink-btn ${textSettings.enableThinking !== false ? "active" : ""}`}
+                onClick={handleThinkingToggle}
+                title={textSettings.enableThinking !== false ? "Disable DeepThink reasoning" : "Enable DeepThink reasoning"}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className={textSettings.enableThinking !== false ? "rotate-anim" : ""}>
+                  <circle cx="12" cy="12" r="3" />
+                  <ellipse cx="12" cy="12" rx="3" ry="9" />
+                  <ellipse cx="12" cy="12" rx="9" ry="3" />
+                </svg>
+                <span>DeepThink</span>
+              </button>
+            )}
 
             {isBusy && status.ready ? (
               <button className="chat-composer-stop-btn" onClick={handleStopGeneration} title="Stop generation" style={{ marginBottom: "2px" }}>

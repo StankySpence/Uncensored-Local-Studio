@@ -507,7 +507,7 @@ body {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 0px;
-  padding: 20px;
+  padding: 10px 12px;
   min-height: 0;
 }
 
@@ -521,7 +521,7 @@ body {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border-color);
-  border-radius: var(--md-shape-corner-large);
+  border-radius: 12px;
   background: var(--md-sys-color-surface);
   box-shadow: var(--glass-shadow);
 }
@@ -531,7 +531,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 18px 20px;
+  padding: 10px 14px;
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -569,7 +569,7 @@ body {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 28px 24px 12px;
+  padding: 14px 14px 8px;
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -672,8 +672,8 @@ body {
 .chat-message-row {
   display: flex;
   align-items: flex-end;
-  gap: 10px;
-  margin-bottom: 6px;
+  gap: 8px;
+  margin-bottom: 4px;
   animation: msgSlideIn 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -693,13 +693,13 @@ body {
 /* Group spacing: bigger gap between user→ai switches */
 .chat-message-row.ai + .chat-message-row.user,
 .chat-message-row.user + .chat-message-row.ai {
-  margin-top: 16px;
+  margin-top: 10px;
 }
 
 /* ─── Avatar Chip ─────────────────────────────────────────────── */
 .chat-avatar {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   flex-shrink: 0;
   display: flex;
@@ -727,25 +727,27 @@ body {
 .chat-bubble-wrap {
   display: flex;
   flex-direction: column;
-  max-width: min(720px, 84%);
+  max-width: min(1180px, 92%);
   gap: 4px;
 }
 
 .chat-message-row.user .chat-bubble-wrap {
   align-items: flex-end;
+  max-width: min(780px, 70%);
 }
 
 .chat-message-row.ai .chat-bubble-wrap {
   align-items: flex-start;
+  max-width: min(1280px, 92%);
 }
 
 .chat-bubble {
-  padding: 12px 16px;
-  border-radius: 18px;
-  line-height: 1.6;
+  padding: 10px 14px;
+  border-radius: 14px;
+  line-height: 1.5;
   overflow-wrap: anywhere;
   position: relative;
-  font-size: 0.9rem;
+  font-size: 0.88rem;
 }
 
 /* AI bubble */
@@ -856,7 +858,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0;
-  padding: 12px 20px 16px;
+  padding: 8px 14px 10px;
   border-top: 1px solid var(--border-color);
   background: color-mix(in srgb, var(--md-sys-color-surface) 80%, transparent);
   backdrop-filter: blur(12px);
@@ -864,12 +866,12 @@ body {
 
 .chat-composer-inner {
   display: flex;
-  align-items: flex-end;
-  gap: 10px;
+  align-items: center;
+  gap: 8px;
   background: var(--md-sys-color-surface-variant);
   border: 1.5px solid var(--border-color);
-  border-radius: 20px;
-  padding: 6px 6px 6px 14px;
+  border-radius: 16px;
+  padding: 4px 5px 4px 10px;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
@@ -897,14 +899,14 @@ body {
   border: none !important;
   background: transparent !important;
   color: var(--md-sys-color-on-surface);
-  padding: 8px 0;
+  padding: 4px 0;
   font: inherit;
   font-size: 0.92rem;
   outline: none;
   resize: none;
-  min-height: 36px;
-  max-height: 160px;
-  line-height: 1.55;
+  min-height: 28px;
+  max-height: 104px;
+  line-height: 1.45;
   overflow-y: auto;
 }
 
@@ -914,14 +916,14 @@ body {
 }
 
 .chat-composer textarea {
-  min-height: 48px;
-  max-height: 160px;
+  min-height: 34px;
+  max-height: 104px;
   resize: vertical;
 }
 
 .chat-composer-send-btn {
-  width: 40px;
-  height: 40px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   border: none;
   flex-shrink: 0;
@@ -952,8 +954,8 @@ body {
 }
 
 .chat-composer-stop-btn {
-  width: 40px;
-  height: 40px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   border: none;
   flex-shrink: 0;
@@ -979,8 +981,8 @@ body {
 }
 
 .chat-composer-attach-btn {
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   border: none;
   flex-shrink: 0;
@@ -1004,11 +1006,35 @@ body {
 }
 
 .chat-composer-hint {
-  text-align: center;
-  font-size: 0.7rem;
+  display: none;
+}
+
+.chat-composer-deepthink-btn {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: transparent;
   color: var(--md-sys-color-outline);
-  margin-top: 6px;
-  opacity: 0.7;
+  font-family: Outfit, sans-serif;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.chat-composer-deepthink-btn.active {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 14%, transparent);
+  border-color: color-mix(in srgb, var(--md-sys-color-primary) 35%, transparent);
+  color: var(--md-sys-color-primary);
+}
+
+.chat-composer-deepthink-btn:hover {
+  border-color: color-mix(in srgb, var(--md-sys-color-primary) 35%, transparent);
 }
 
 .text-chat-settings {
@@ -2556,7 +2582,7 @@ html[data-theme^="dark"] .m3-segment-item:hover:not(.active):not(.disabled) {
 
 /* Chat Thinking Block (Reasoning Process) */
 .chat-thinking-container {
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   border-radius: 8px;
   border: 1px dashed rgba(255, 255, 255, 0.15);
   background: rgba(255, 255, 255, 0.03);
@@ -2569,11 +2595,11 @@ html[data-theme^="dark"] .m3-segment-item:hover:not(.active):not(.disabled) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 12px;
+  padding: 6px 10px;
   background: rgba(255, 255, 255, 0.05);
   border: none;
   color: var(--md-sys-color-on-surface-variant);
-  font-size: 0.8rem;
+  font-size: 0.76rem;
   font-weight: 500;
   cursor: pointer;
   text-align: left;
@@ -2593,16 +2619,16 @@ html[data-theme^="dark"] .m3-segment-item:hover:not(.active):not(.disabled) {
 }
 
 .chat-thinking-content {
-  padding: 10px 12px;
-  font-size: 0.8rem;
-  line-height: 1.5;
+  padding: 8px 10px;
+  font-size: 0.76rem;
+  line-height: 1.45;
   color: var(--md-sys-color-on-surface-variant);
   opacity: 0.75;
   border-top: 1px dashed rgba(255, 255, 255, 0.1);
   white-space: pre-wrap;
   font-family: var(--font-family-monospace, monospace);
   background: rgba(0, 0, 0, 0.1);
-  max-height: 200px;
+  max-height: 150px;
   overflow-y: auto;
 }
 

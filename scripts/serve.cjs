@@ -139,6 +139,7 @@ let llmSettings = {
   backendMode: "",
   backendBinary: "",
   supportsVision: false,
+  visionMode: "none",
   flashAttn: true,
   cacheTypeK: "q8_0",
   cacheTypeV: "q8_0",
@@ -1383,6 +1384,8 @@ function killLlm() {
   return new Promise((resolve) => {
     llmReady = false;
     llmSettings.supportsVision = false;
+    llmSettings.visionMode = "none";
+    llmSettings.mmproj = null;
     if (!llmProc) {
       resolve();
       return;
@@ -2473,6 +2476,14 @@ function chooseAutoContext(modelFilename, isGpu) {
   return 2048;
 }
 
+function modelHasEmbeddedVisionSupport(filename) {
+  const lower = String(filename || "").toLowerCase();
+  return /gemma[-_]?4/.test(lower) ||
+         /gemma[-_]?3n/.test(lower) ||
+         /(?:^|[-_])e[24]b(?:[-_]|$)/.test(lower) ||
+         /paligemma/.test(lower);
+}
+
 async function startLlm(settings = {}) {
   const filename = path.basename(String(settings.model || ""));
   const modelPath = path.join(LLM_MODELS, filename);
@@ -2539,6 +2550,7 @@ async function startLlm(settings = {}) {
 
   let mmprojPath = null;
   const lowerFilename = filename.toLowerCase();
+  const hasEmbeddedVision = modelHasEmbeddedVisionSupport(filename);
   const isMultimodal = lowerFilename.includes("llava") ||
                        lowerFilename.includes("vision") ||
                        lowerFilename.includes("qwen2vl") ||
@@ -2654,8 +2666,9 @@ async function startLlm(settings = {}) {
   if (mmprojPath) {
     args.push("--mmproj", mmprojPath);
   }
-  llmSettings.supportsVision = Boolean(mmprojPath);
+  llmSettings.supportsVision = Boolean(mmprojPath || hasEmbeddedVision);
   llmSettings.mmproj = mmprojPath ? path.basename(mmprojPath) : null;
+  llmSettings.visionMode = mmprojPath ? "mmproj" : (hasEmbeddedVision ? "embedded" : "none");
   const spawnEnv = { ...process.env };
   const backendDir = path.dirname(backend.path);
   
