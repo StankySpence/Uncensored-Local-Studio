@@ -89,14 +89,22 @@ const LLM_BACKEND_PATHS = {
   winCuda: path.join(ROOT, "app", "llm-backend", "win", "cuda", "llama-server.exe"),
   winVulkan: path.join(ROOT, "app", "llm-backend", "win", "vulkan", "llama-server.exe"),
   winSycl: path.join(ROOT, "app", "llm-backend", "win", "sycl", "llama-server.exe"),
+  winHip: path.join(ROOT, "app", "llm-backend", "win", "hip", "llama-server.exe"),
   winCpu: path.join(ROOT, "app", "llm-backend", "win", "cpu", "llama-server.exe"),
   linuxCuda: path.join(ROOT, "app", "llm-backend", "linux", "cuda", "llama-server"),
+  linuxRocm: path.join(ROOT, "app", "llm-backend", "linux", "rocm", "llama-server"),
   linuxVulkan: path.join(ROOT, "app", "llm-backend", "linux", "vulkan", "llama-server"),
   linuxSycl: path.join(ROOT, "app", "llm-backend", "linux", "sycl", "llama-server"),
   linuxCpu: path.join(ROOT, "app", "llm-backend", "linux", "cpu", "llama-server"),
   macArm64: path.join(ROOT, "app", "llm-backend", "mac", "arm64", "llama-server"),
   macX64: path.join(ROOT, "app", "llm-backend", "mac", "x64", "llama-server"),
 };
+const LLM_CONFIG_DIR = path.join(ROOT, "app", "config");
+const LLM_MODEL_SETTINGS_PATH = path.join(LLM_CONFIG_DIR, "llm-model-settings.json");
+const LLM_BENCHMARK_PATH = path.join(LLM_CONFIG_DIR, "llm-benchmarks.json");
+if (!fs.existsSync(LLM_CONFIG_DIR)) {
+  fs.mkdirSync(LLM_CONFIG_DIR, { recursive: true });
+}
 const OPENVINO_MODELS = path.join(ROOT, "app", "openvino-models");
 if (!fs.existsSync(OPENVINO_MODELS)) {
   fs.mkdirSync(OPENVINO_MODELS, { recursive: true });
@@ -832,10 +840,12 @@ function getLlamaTelemetryBackendPath() {
   if (osPlatform === "win32") {
     if (fs.existsSync(LLM_BACKEND_PATHS.winVulkan)) return LLM_BACKEND_PATHS.winVulkan;
     if (fs.existsSync(LLM_BACKEND_PATHS.winSycl)) return LLM_BACKEND_PATHS.winSycl;
+    if (fs.existsSync(LLM_BACKEND_PATHS.winHip)) return LLM_BACKEND_PATHS.winHip;
     if (fs.existsSync(LLM_BACKEND_PATHS.winCuda)) return LLM_BACKEND_PATHS.winCuda;
   } else if (osPlatform === "linux") {
     if (fs.existsSync(LLM_BACKEND_PATHS.linuxVulkan)) return LLM_BACKEND_PATHS.linuxVulkan;
     if (fs.existsSync(LLM_BACKEND_PATHS.linuxSycl)) return LLM_BACKEND_PATHS.linuxSycl;
+    if (fs.existsSync(LLM_BACKEND_PATHS.linuxRocm)) return LLM_BACKEND_PATHS.linuxRocm;
     if (fs.existsSync(LLM_BACKEND_PATHS.linuxCuda)) return LLM_BACKEND_PATHS.linuxCuda;
   }
   return null;
@@ -874,6 +884,89 @@ pollLlamaVram(true);
 
 function getLlamaVram() {
   return cachedLlamaVramInfo;
+}
+
+function readJsonFile(filePath, fallback) {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function writeJsonFile(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(value, null, 2) + "\n", "utf8");
+}
+
+function getPersistedLlmModelSettings() {
+  return readJsonFile(LLM_MODEL_SETTINGS_PATH, { models: {} });
+}
+
+function savePersistedLlmModelSettings(settings) {
+  writeJsonFile(LLM_MODEL_SETTINGS_PATH, settings && typeof settings === "object" ? settings : { models: {} });
+}
+
+function getLlmModelSettings(filename) {
+  const safeFilename = path.basename(String(filename || ""));
+  if (!safeFilename) return {};
+  const settings = getPersistedLlmModelSettings();
+  return settings.models?.[safeFilename] || {};
+}
+
+function updateLlmModelSettings(filename, patch) {
+  const safeFilename = path.basename(String(filename || ""));
+  if (!safeFilename) return {};
+  const allSettings = getPersistedLlmModelSettings();
+  if (!allSettings.models || typeof allSettings.models !== "object") allSettings.models = {};
+  const previous = allSettings.models[safeFilename] || {};
+  const next = {
+    ...previous,
+    ...patch,
+    updatedAt: new Date().toISOString(),
+  };
+  allSettings.models[safeFilename] = next;
+  savePersistedLlmModelSettings(allSettings);
+  return next;
+}
+
+function getPersistedLlmBenchmarks() {
+  return readJsonFile(LLM_BENCHMARK_PATH, { results: [] });
+}
+
+function savePersistedLlmBenchmarks(benchmarks) {
+  writeJsonFile(LLM_BENCHMARK_PATH, benchmarks && typeof benchmarks === "object" ? benchmarks : { results: [] });
+}
+
+function recordLlmBenchmark(result) {
+  const benchmarks = getPersistedLlmBenchmarks();
+  const results = Array.isArray(benchmarks.results) ? benchmarks.results : [];
+  results.unshift({
+    ...result,
+    createdAt: new Date().toISOString(),
+  });
+  benchmarks.results = results.slice(0, 100);
+  savePersistedLlmBenchmarks(benchmarks);
+  return benchmarks.results[0];
+}
+
+function parseLlamaDeviceList(output) {
+  const devices = [];
+  const devicePattern = /(CUDA|Vulkan|SYCL|HIP|ROCm)\d*\s*:\s*(.+?)\s+\(([\d.]+)\s+MiB(?:,\s*([\d.]+)\s+MiB free)?\)/gi;
+  let match;
+  while ((match = devicePattern.exec(output || "")) !== null) {
+    const totalMiB = Number(match[3]);
+    const freeMiB = match[4] ? Number(match[4]) : NaN;
+    if (!Number.isFinite(totalMiB) || totalMiB <= 0) continue;
+    devices.push({
+      type: match[1],
+      name: match[2].trim(),
+      vram_gb: Math.round((totalMiB / 1024) * 100) / 100,
+      free_vram_gb: Number.isFinite(freeMiB) ? Math.round((freeMiB / 1024) * 100) / 100 : null,
+    });
+  }
+  return devices.sort((a, b) => b.vram_gb - a.vram_gb);
 }
 
 let cachedMacRamUsedGb = null;
@@ -1307,43 +1400,120 @@ function getLlmBackend() {
   return getLlmBackendCandidates()[0] || null;
 }
 
-function getLlmBackendCandidates() {
-  const candidates = [];
-  const includeUndetectedGpu = process.env.LOCALAI_LLM_TRY_UNDETECTED_GPU === "1";
-  const add = (key, backendPath, mode, detected = true) => {
-    if (!backendPath || !fs.existsSync(backendPath)) return;
-    if (key !== "cpu" && !detected && !includeUndetectedGpu) return;
-    if (candidates.some((item) => item.path === backendPath)) return;
-    candidates.push({ key, path: backendPath, mode, detected });
-  };
+let cachedLlmBackendProbe = null;
+let cachedLlmBackendProbeAt = 0;
 
-  if (osPlatform === "win32") {
-    add("cuda", LLM_BACKEND_PATHS.winCuda, "Auto (CUDA/CPU)", Boolean(detectLlamaCudaGpu()));
-    add("vulkan", LLM_BACKEND_PATHS.winVulkan, "Auto (Vulkan/CPU)", Boolean(detectLlamaVulkanGpu()));
-    add("sycl", LLM_BACKEND_PATHS.winSycl, "Auto (SYCL/CPU)", Boolean(detectLlamaSyclGpu()));
-    add("cpu", LLM_BACKEND_PATHS.winCpu, "CPU", true);
-  } else if (osPlatform === "darwin") {
-    add("metal", process.arch === "arm64" ? LLM_BACKEND_PATHS.macArm64 : LLM_BACKEND_PATHS.macX64, process.arch === "arm64" ? "Metal GPU" : "CPU", true);
-  } else {
-    add("cuda", LLM_BACKEND_PATHS.linuxCuda, "Auto (CUDA/CPU)", Boolean(detectLlamaCudaGpu()));
-    add("sycl", LLM_BACKEND_PATHS.linuxSycl, "Auto (SYCL/CPU)", Boolean(detectLlamaSyclGpu()));
-    add("vulkan", LLM_BACKEND_PATHS.linuxVulkan, "Auto (Vulkan/CPU)", Boolean(detectLlamaVulkanGpu()));
-    add("cpu", LLM_BACKEND_PATHS.linuxCpu, "CPU", true);
+function resolveSystemLlamaServer() {
+  const configured = process.env.LOCALAI_LLM_SYSTEM_SERVER || process.env.LLAMA_SERVER_PATH || "";
+  if (configured && fs.existsSync(configured)) return configured;
+  return "";
+}
+
+function probeLlmBackend(backend) {
+  if (!backend?.path || !fs.existsSync(backend.path)) {
+    return {
+      ...backend,
+      installed: false,
+      detected: false,
+      devices: [],
+      error: "Backend binary not installed.",
+    };
   }
 
-  const priority = osPlatform === "win32"
-    ? { cuda: 0, vulkan: 1, sycl: 2, metal: 3, cpu: 9 }
-    : osPlatform === "darwin"
-      ? { metal: 0, cpu: 9 }
-      : { cuda: 0, sycl: 1, vulkan: 2, cpu: 9 };
+  try {
+    const result = spawnSync(backend.path, ["--list-devices"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 10000,
+      maxBuffer: 1024 * 1024,
+    });
+    const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+    const devices = parseLlamaDeviceList(output);
+    const detected = backend.key === "cpu" || backend.key === "metal" || backend.key === "system" || devices.length > 0;
+    return {
+      ...backend,
+      installed: true,
+      detected,
+      devices,
+      device: devices[0] || null,
+      error: result.status && !detected ? output.trim().slice(-600) : "",
+    };
+  } catch (err) {
+    return {
+      ...backend,
+      installed: true,
+      detected: backend.key === "cpu",
+      devices: [],
+      device: null,
+      error: err.message || String(err),
+    };
+  }
+}
 
-  return candidates.sort((a, b) => {
-    if (a.key === "cpu" && b.key !== "cpu") return 1;
-    if (b.key === "cpu" && a.key !== "cpu") return -1;
-    const detectedDelta = Number(b.detected) - Number(a.detected);
-    if (detectedDelta) return detectedDelta;
-    return (priority[a.key] ?? 8) - (priority[b.key] ?? 8);
-  });
+function getAllLlmBackendCandidates() {
+  const systemPath = resolveSystemLlamaServer();
+  const candidates = [];
+  const add = (key, backendPath, mode, portable = true) => {
+    if (!backendPath) return;
+    if (candidates.some((item) => item.path === backendPath)) return;
+    candidates.push({ key, path: backendPath, mode, portable });
+  };
+
+  if (systemPath) add("system", systemPath, "System llama.cpp", false);
+  if (osPlatform === "win32") {
+    add("cuda", LLM_BACKEND_PATHS.winCuda, "Auto (CUDA/CPU)");
+    add("hip", LLM_BACKEND_PATHS.winHip, "Auto (HIP/CPU)");
+    add("vulkan", LLM_BACKEND_PATHS.winVulkan, "Auto (Vulkan/CPU)");
+    add("sycl", LLM_BACKEND_PATHS.winSycl, "Auto (SYCL/CPU)");
+    add("cpu", LLM_BACKEND_PATHS.winCpu, "CPU");
+  } else if (osPlatform === "darwin") {
+    add("metal", process.arch === "arm64" ? LLM_BACKEND_PATHS.macArm64 : LLM_BACKEND_PATHS.macX64, process.arch === "arm64" ? "Metal GPU" : "CPU");
+  } else {
+    add("cuda", LLM_BACKEND_PATHS.linuxCuda, "Auto (CUDA/CPU)");
+    add("rocm", LLM_BACKEND_PATHS.linuxRocm, "Auto (ROCm/CPU)");
+    add("sycl", LLM_BACKEND_PATHS.linuxSycl, "Auto (SYCL/CPU)");
+    add("vulkan", LLM_BACKEND_PATHS.linuxVulkan, "Auto (Vulkan/CPU)");
+    add("cpu", LLM_BACKEND_PATHS.linuxCpu, "CPU");
+  }
+  return candidates;
+}
+
+function getLlmBackendProbe(force = false) {
+  const now = Date.now();
+  if (!force && cachedLlmBackendProbe && now - cachedLlmBackendProbeAt < 60000) return cachedLlmBackendProbe;
+
+  const probed = getAllLlmBackendCandidates().map(probeLlmBackend);
+  const priority = osPlatform === "win32"
+    ? { system: -1, cuda: 0, hip: 1, vulkan: 2, sycl: 3, metal: 4, cpu: 9 }
+    : osPlatform === "darwin"
+      ? { system: -1, metal: 0, cpu: 9 }
+      : { system: -1, cuda: 0, rocm: 1, sycl: 2, vulkan: 3, cpu: 9 };
+
+  const available = probed
+    .filter((item) => item.installed && item.detected)
+    .sort((a, b) => {
+      if (a.key === "cpu" && b.key !== "cpu") return 1;
+      if (b.key === "cpu" && a.key !== "cpu") return -1;
+      return (priority[a.key] ?? 8) - (priority[b.key] ?? 8);
+    });
+
+  cachedLlmBackendProbe = {
+    generatedAt: new Date().toISOString(),
+    candidates: probed,
+    available,
+    selected: available[0] || null,
+  };
+  cachedLlmBackendProbeAt = now;
+  return cachedLlmBackendProbe;
+}
+
+function getLlmBackendCandidates() {
+  const includeUndetectedGpu = process.env.LOCALAI_LLM_TRY_UNDETECTED_GPU === "1";
+  const probe = getLlmBackendProbe();
+  if (includeUndetectedGpu) {
+    return probe.candidates.filter((item) => item.installed);
+  }
+  return probe.available;
 }
 
 function getLlmModels() {
@@ -2647,13 +2817,37 @@ async function startLlm(settings = {}) {
   if (candidates.length === 0) {
     throw new Error("llama.cpp is not installed. Run the platform setup script to install the text backend.");
   }
+  const persistedSettings = getLlmModelSettings(filename);
+  const preferredBackend = String(settings.preferredBackend || persistedSettings.preferredBackend || "").toLowerCase();
+  const sortedCandidates = preferredBackend
+    ? [...candidates].sort((a, b) => {
+        if (a.key === preferredBackend && b.key !== preferredBackend) return -1;
+        if (b.key === preferredBackend && a.key !== preferredBackend) return 1;
+        return 0;
+      })
+    : candidates;
 
   const failures = [];
-  for (const backend of candidates) {
+  for (const backend of sortedCandidates) {
     for (const profile of buildLlmLoadProfiles(settings, backend)) {
       try {
         await startLlmWithBackend({ ...settings, __loadProfile: profile }, backend);
         llmSettings.backendFallbacks = failures;
+        updateLlmModelSettings(filename, {
+          preferredBackend: backend.key,
+          lastBackendMode: llmSettings.backendMode,
+          lastBackendBinary: llmSettings.backendBinary,
+          lastSettings: {
+            threads: llmSettings.threads,
+            contextSize: llmSettings.contextSize,
+            gpuLayers: llmSettings.gpuLayers,
+            cacheTypeK: llmSettings.cacheTypeK,
+            cacheTypeV: llmSettings.cacheTypeV,
+            batchSize: llmSettings.batchSize,
+            ubatchSize: llmSettings.ubatchSize,
+            flashAttn: llmSettings.flashAttn,
+          },
+        });
         return;
       } catch (err) {
         const message = err.message || String(err);
@@ -2833,8 +3027,9 @@ async function startLlmWithBackend(settings = {}, backend) {
   }
   
   // CPU mode: lock memory to prevent OS paging (critical for consistent speed)
-  const isGpuMode = backend.mode.includes("GPU") || backend.mode.includes("CUDA") || 
-                    backend.mode.includes("Vulkan") || backend.mode.includes("Metal") || 
+  const isGpuMode = backend.mode.includes("GPU") || backend.mode.includes("CUDA") ||
+                    backend.mode.includes("HIP") || backend.mode.includes("ROCm") ||
+                    backend.mode.includes("Vulkan") || backend.mode.includes("Metal") ||
                     backend.mode.includes("SYCL");
   if (!isGpuMode && llmSettings.mlock) {
     args.push("--mlock");                    // ✅ Prevent OS swapping on CPU
@@ -2902,6 +3097,7 @@ async function startLlmWithBackend(settings = {}, backend) {
     process.stderr.write("  [llm-err] " + output);
     if (/Vulkan\d+\s*:/i.test(output)) llmSettings.backendMode = "Vulkan GPU";
     else if (/CUDA\d+\s*:/i.test(output)) llmSettings.backendMode = "CUDA GPU";
+    else if (/(HIP|ROCm)\d*\s*:/i.test(output)) llmSettings.backendMode = "ROCm GPU";
     else if (/SYCL\d+\s*:/i.test(output)) llmSettings.backendMode = "SYCL GPU";
     else if (/Metal/i.test(output) && /GPU|device/i.test(output)) llmSettings.backendMode = "Metal GPU";
     else if (/\-\s+CPU\s+:/i.test(output) && llmSettings.backendMode.startsWith("Auto")) llmSettings.backendMode = "CPU";
@@ -3983,6 +4179,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === "/api/llm/status" && req.method === "GET") {
     const backend = getLlmBackend();
+    const probe = getLlmBackendProbe();
     return json(res, 200, {
       ready: llmReady,
       running: llmProc !== null,
@@ -3993,7 +4190,33 @@ const server = http.createServer(async (req, res) => {
       backendInstalled: Boolean(backend),
       backendMode: backend?.mode || "",
       backendPath: backend?.path || "",
+      selectedBackend: probe.selected,
+      availableBackends: probe.available,
     });
+  }
+
+  if (req.url.startsWith("/api/llm/backends") && req.method === "GET") {
+    const parsed = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    return json(res, 200, { ok: true, ...getLlmBackendProbe(parsed.searchParams.get("refresh") === "1") });
+  }
+
+  if (req.url === "/api/llm/stats" && req.method === "GET") {
+    return json(res, 200, getLlmRuntimeStats());
+  }
+
+  if (req.url === "/api/llm/model-settings" && req.method === "GET") {
+    return json(res, 200, { ok: true, ...getPersistedLlmModelSettings() });
+  }
+
+  if (req.url === "/api/llm/model-settings" && req.method === "POST") {
+    const body = await readJsonBody(req, res);
+    if (!body) return;
+    const filename = path.basename(String(body.model || ""));
+    if (!filename) return json(res, 400, { ok: false, error: "model is required" });
+    const updated = updateLlmModelSettings(filename, {
+      preferredBackend: body.preferredBackend ? String(body.preferredBackend).toLowerCase() : undefined,
+    });
+    return json(res, 200, { ok: true, model: filename, settings: updated });
   }
 
   if (req.url === "/api/llm/models" && req.method === "GET") {
@@ -4042,6 +4265,17 @@ const server = http.createServer(async (req, res) => {
   if (req.url === "/api/llm/stop" && req.method === "POST") {
     await runExclusiveLlmOperation(() => killLlm());
     return json(res, 200, { ok: true });
+  }
+
+  if (req.url === "/api/llm/benchmark" && req.method === "POST") {
+    const body = await readJsonBody(req, res);
+    if (!body) return;
+    try {
+      const result = await runExclusiveLlmOperation(() => benchmarkLlmModel(body));
+      return json(res, 200, result);
+    } catch (err) {
+      return json(res, 500, { ok: false, error: err.message || String(err) });
+    }
   }
 
 function isOomError(msg) {
@@ -4189,6 +4423,124 @@ async function doLlmChat(req, res, body, retryCount = 0) {
   } catch (err) {
     return json(res, 500, { ok: false, error: err.message || String(err) });
   }
+}
+
+function getLlmRuntimeStats() {
+  const benchmarks = getPersistedLlmBenchmarks();
+  return {
+    ok: true,
+    ready: llmReady,
+    running: llmProc !== null,
+    selectedBackend: getLlmBackendProbe().selected,
+    settings: llmSettings,
+    modelSettings: getPersistedLlmModelSettings(),
+    benchmarks: (benchmarks.results || []).slice(0, 20),
+  };
+}
+
+async function benchmarkLlmBackend(model, backend, baseSettings = {}) {
+  const prompt = String(baseSettings.prompt || "Reply with one short sentence about local AI performance.");
+  const startedAt = Date.now();
+  await startLlmWithBackend({
+    ...baseSettings,
+    model,
+    contextSize: Math.min(2048, Number(baseSettings.contextSize) || 2048),
+    gpuLayers: Number.isFinite(Number(baseSettings.gpuLayers)) ? Number(baseSettings.gpuLayers) : -1,
+    enableThinking: false,
+  }, backend);
+
+  const result = await requestJson(`http://127.0.0.1:${PORT_LLM}/v1/chat/completions`, {
+    model: llmSettings.model || "local-model",
+    messages: [
+      { role: "system", content: "You are a concise local benchmark assistant." },
+      { role: "user", content: prompt },
+    ],
+    temperature: 0.2,
+    max_tokens: 64,
+    stream: false,
+  }, 180000);
+  const finishedAt = Date.now();
+  const timings = result.timings || {};
+  return {
+    backendKey: backend.key,
+    backendMode: llmSettings.backendMode || backend.mode,
+    backendBinary: llmSettings.backendBinary || path.basename(backend.path),
+    model,
+    ok: true,
+    total_ms: finishedAt - startedAt,
+    prompt_ms: Number(timings.prompt_ms) || null,
+    predicted_ms: Number(timings.predicted_ms) || null,
+    predicted_n: Number(timings.predicted_n) || null,
+    predicted_per_second: Number(timings.predicted_per_second) || null,
+    prompt_per_second: Number(timings.prompt_per_second) || null,
+  };
+}
+
+async function benchmarkLlmModel(settings = {}) {
+  const filename = path.basename(String(settings.model || llmSettings.model || ""));
+  const modelPath = path.join(LLM_MODELS, filename);
+  if (!filename || !pathInside(modelPath, LLM_MODELS) || !fs.existsSync(modelPath)) {
+    throw new Error("Select a downloaded GGUF text model before benchmarking.");
+  }
+
+  const previous = {
+    ready: llmReady,
+    model: llmSettings.model,
+    settings: { ...llmSettings },
+  };
+  const requestedBackends = Array.isArray(settings.backends)
+    ? settings.backends.map((item) => String(item).toLowerCase())
+    : [];
+  const candidates = getLlmBackendCandidates()
+    .filter((backend) => backend.key !== "cpu" || settings.includeCpu !== false)
+    .filter((backend) => requestedBackends.length === 0 || requestedBackends.includes(backend.key));
+
+  if (candidates.length === 0) {
+    throw new Error("No available text backends were detected for benchmarking.");
+  }
+
+  const results = [];
+  for (const backend of candidates) {
+    try {
+      const result = await benchmarkLlmBackend(filename, backend, settings);
+      results.push(recordLlmBenchmark(result));
+    } catch (err) {
+      results.push(recordLlmBenchmark({
+        backendKey: backend.key,
+        backendMode: backend.mode,
+        backendBinary: path.basename(backend.path),
+        model: filename,
+        ok: false,
+        error: (err.message || String(err)).slice(-800),
+      }));
+      await killLlm();
+    }
+  }
+
+  const successful = results
+    .filter((item) => item.ok && Number(item.predicted_per_second) > 0)
+    .sort((a, b) => Number(b.predicted_per_second) - Number(a.predicted_per_second));
+  const winner = successful[0] || null;
+  if (winner) {
+    updateLlmModelSettings(filename, {
+      preferredBackend: winner.backendKey,
+      benchmarkWinner: {
+        backendMode: winner.backendMode,
+        predicted_per_second: winner.predicted_per_second,
+        createdAt: winner.createdAt,
+      },
+    });
+  }
+
+  if (previous.ready && previous.model && previous.model === filename && winner) {
+    try {
+      await startLlm({ ...previous.settings, model: filename, preferredBackend: winner.backendKey });
+    } catch (err) {
+      console.warn("  [llm] Failed to restore text model after benchmark:", err.message || err);
+    }
+  }
+
+  return { ok: true, model: filename, winner, results };
 }
 
 // ── llmfit Integration ──────────────────────────────────────────────────────────

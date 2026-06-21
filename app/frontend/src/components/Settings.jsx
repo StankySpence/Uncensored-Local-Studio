@@ -5,7 +5,7 @@ import {
   Monitor, HardDrive, MemoryStick, Thermometer, Hash, Layers,
   ChevronRight, Box, Wand2, Lightbulb, RotateCcw, Check, Palette
 } from "lucide-react";
-import { stopServer, formatBytes, getLlmStatus, startLlm, stopLlm } from "../services/api";
+import { stopServer, formatBytes, getLlmBackends, getLlmStats, getLlmStatus, benchmarkLlm, startLlm, stopLlm } from "../services/api";
 import { THEMES } from "../themes";
 
 const ASPECT_RATIOS = [
@@ -187,6 +187,9 @@ function Settings({
   setTheme,
 }) {
   const [llmStatus, setLlmStatus] = useState({ ready: false, settings: {} });
+  const [llmBackends, setLlmBackends] = useState({ available: [], candidates: [] });
+  const [llmStats, setLlmStats] = useState({ benchmarks: [] });
+  const [benchmarkBusy, setBenchmarkBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -194,6 +197,13 @@ function Settings({
       try {
         const status = await getLlmStatus();
         if (!cancelled) setLlmStatus(status);
+      } catch (_) {}
+      try {
+        const [backends, stats] = await Promise.all([getLlmBackends(), getLlmStats()]);
+        if (!cancelled) {
+          setLlmBackends(backends);
+          setLlmStats(stats);
+        }
       } catch (_) {}
     };
     fetchLlmStatus();
@@ -246,6 +256,37 @@ function Settings({
     ubatchSize: settings?.ubatchSize,
     performanceProfile: settings?.performanceProfile,
   });
+
+  const handleBenchmarkTextBackend = async () => {
+    const model = llmStatus.settings?.model;
+    if (!model) {
+      showAlert({ title: "No Text Model Loaded", message: "Load a GGUF text model before benchmarking.", danger: true });
+      return;
+    }
+    setBenchmarkBusy(true);
+    try {
+      const result = await benchmarkLlm(model, {
+        contextSize: Math.min(2048, Number(textSettings?.contextSize) || 2048),
+        gpuLayers: textSettings?.gpuLayers ?? -1,
+        includeCpu: true,
+      });
+      const winner = result.winner;
+      showAlert({
+        title: winner ? "Benchmark Complete" : "Benchmark Finished",
+        message: winner
+          ? `Fastest backend: ${winner.backendMode} at ${Number(winner.predicted_per_second || 0).toFixed(1)} tokens/sec.`
+          : "Benchmark finished, but no backend returned usable timing data.",
+      });
+      const [status, backends, stats] = await Promise.all([getLlmStatus(), getLlmBackends(true), getLlmStats()]);
+      setLlmStatus(status);
+      setLlmBackends(backends);
+      setLlmStats(stats);
+    } catch (err) {
+      showAlert({ title: "Benchmark Failed", message: err.message || String(err), danger: true });
+    } finally {
+      setBenchmarkBusy(false);
+    }
+  };
 
   const handleThinkingToggle = async (enabled) => {
     const nextSettings = { ...textSettings, enableThinking: enabled };
@@ -924,6 +965,26 @@ function Settings({
                     GPU Layers: {llmStatus.settings?.gpuLayers === -1 ? "All" : llmStatus.settings?.gpuLayers}
                   </div>
                 )}
+                <div style={{ marginTop: "10px", fontSize: "0.78rem", lineHeight: "1.5" }}>
+                  Available: {(llmBackends.available || []).map((backend) => backend.key.toUpperCase()).join(", ") || "None"}<br />
+                  Fastest saved: {(() => {
+                    const model = llmStatus.settings?.model;
+                    const winner = (llmStats.benchmarks || []).find((item) => item.ok && (!model || item.model === model));
+                    return winner
+                      ? `${winner.backendMode} (${Number(winner.predicted_per_second || 0).toFixed(1)} tok/s)`
+                      : "Not benchmarked";
+                  })()}
+                </div>
+                <button
+                  className="m3-button secondary"
+                  type="button"
+                  onClick={handleBenchmarkTextBackend}
+                  disabled={benchmarkBusy || !llmStatus.ready}
+                  style={{ marginTop: "12px", width: "100%", justifyContent: "center" }}
+                >
+                  <Gauge size={15} />
+                  {benchmarkBusy ? "Benchmarking..." : "Benchmark Text Backends"}
+                </button>
               </div>
             </div>
           </div>

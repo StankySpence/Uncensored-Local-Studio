@@ -140,6 +140,17 @@ function Install-LlamaArchive {
     Write-Host "   OK  llama.cpp $Variant backend installed."
 }
 
+function Try-InstallLlamaArchive {
+    param([string]$Variant, [string]$AssetName, [string]$Reason)
+
+    try {
+        Install-LlamaArchive -Variant $Variant -AssetName $AssetName
+    } catch {
+        Write-Host "   !!  Skipping optional llama.cpp $Variant backend: $Reason" -ForegroundColor Yellow
+        Write-Host "       $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
+}
+
 $hasNvidia = $false
 try {
     $gpus = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue
@@ -157,7 +168,20 @@ if (-not $hasNvidia) {
 }
 
 if ($hasNvidia) {
-    Install-LlamaArchive -Variant "cuda" -AssetName "llama-$Release-bin-win-cuda-12.4-x64.zip"
+    Try-InstallLlamaArchive -Variant "cuda" -AssetName "llama-$Release-bin-win-cuda-12.4-x64.zip" -Reason "NVIDIA CUDA acceleration"
+}
+
+$hasAmd = $false
+try {
+    $gpus = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue
+    foreach ($gpu in $gpus) {
+        if ($gpu.Name -like "*AMD*" -or $gpu.Name -like "*Radeon*") {
+            $hasAmd = $true
+        }
+    }
+} catch {}
+if ($hasAmd) {
+    Try-InstallLlamaArchive -Variant "hip" -AssetName "llama-$Release-bin-win-hip-x64.zip" -Reason "AMD HIP acceleration"
 }
 # Intel Arc/Graphics detection for SYCL backend
 $hasIntel = $false
@@ -170,7 +194,7 @@ try {
     }
 } catch {}
 if ($hasIntel) {
-    Install-LlamaArchive -Variant "sycl" -AssetName "llama-$Release-bin-win-sycl-x64.zip"
+    Try-InstallLlamaArchive -Variant "sycl" -AssetName "llama-$Release-bin-win-sycl-x64.zip" -Reason "Intel SYCL acceleration"
 }
 Install-LlamaArchive -Variant "vulkan" -AssetName "llama-$Release-bin-win-vulkan-x64.zip"
 Install-LlamaArchive -Variant "cpu" -AssetName "llama-$Release-bin-win-cpu-x64.zip"

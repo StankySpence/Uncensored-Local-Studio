@@ -129,12 +129,14 @@ fi
 CPU_SERVER_PATH="$APP_DIR/backend/linux/cpu/sd-server-cpu"
 VULKAN_SERVER_PATH="$APP_DIR/backend/linux/vulkan/sd-server-vulkan"
 LLM_CUDA_PATH="$APP_DIR/llm-backend/linux/cuda/llama-server"
+LLM_ROCM_PATH="$APP_DIR/llm-backend/linux/rocm/llama-server"
+LLM_SYCL_PATH="$APP_DIR/llm-backend/linux/sycl/llama-server"
 LLM_VULKAN_PATH="$APP_DIR/llm-backend/linux/vulkan/llama-server"
 LLM_CPU_PATH="$APP_DIR/llm-backend/linux/cpu/llama-server"
 if [[ ! -x "$CPU_BACKEND_PATH" || ! -x "$CPU_SERVER_PATH" ]] && [[ ! -x "$BACKEND_PATH" || ! -x "$VULKAN_SERVER_PATH" ]]; then
   SETUP_REASON="Linux backend binaries are missing or not executable."
 fi
-if [[ ! -x "$LLM_CUDA_PATH" && ! -x "$LLM_VULKAN_PATH" && ! -x "$LLM_CPU_PATH" ]]; then
+if [[ ! -x "$LLM_CUDA_PATH" && ! -x "$LLM_ROCM_PATH" && ! -x "$LLM_SYCL_PATH" && ! -x "$LLM_VULKAN_PATH" && ! -x "$LLM_CPU_PATH" ]]; then
   SETUP_REASON="Linux llama.cpp text backend is missing or not executable."
 fi
 

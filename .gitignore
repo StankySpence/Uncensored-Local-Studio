@@ -9,6 +9,7 @@ app/llm-backend/
 app/tools/
 
 # Generated files
+app/config/
 app/dist/
 app/outputs/
 

@@ -316,6 +316,32 @@ export async function getLlmStatus() {
   }
 }
 
+export async function getLlmBackends(refresh = false) {
+  const res = await fetch(`/api/llm/backends${refresh ? "?refresh=1" : ""}`);
+  return await readJsonResponse(res, "The local server returned invalid text backend data.");
+}
+
+export async function getLlmStats() {
+  const res = await fetch("/api/llm/stats");
+  return await readJsonResponse(res, "The local server returned invalid text runtime stats.");
+}
+
+export async function benchmarkLlm(model, options = {}) {
+  const res = await fetch("/api/llm/benchmark", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      backends: options.backends,
+      includeCpu: options.includeCpu,
+      prompt: options.prompt,
+      contextSize: options.contextSize,
+      gpuLayers: options.gpuLayers,
+    }),
+  });
+  return await readJsonResponse(res, "The local server returned invalid benchmark data.");
+}
+
 export async function listLlmModels() {
   const res = await fetch("/api/llm/models");
   const data = await readJsonResponse(res, "The local server returned invalid text model data.");
@@ -358,6 +384,7 @@ export async function startLlm(model, options = {}) {
       batchSize: options.batchSize,
       ubatchSize: options.ubatchSize,
       performanceProfile: options.performanceProfile,
+      preferredBackend: options.preferredBackend,
     }),
   });
   return await readJsonResponse(res, "The local server returned an invalid text backend response.");
