@@ -6,7 +6,7 @@ import ModelManager from "./components/ModelManager";
 import Settings from "./components/Settings";
 import TextChat from "./components/TextChat";
 import SpeechTranscriber from "./components/SpeechTranscriber";
-import { cleanupCandidates, formatBytes, getCleanupCandidates, getDiagnostics, getHardwareSpecs, getHealth, getTelemetry, getBackendOptions, getBackendStatus, listGeneratedOutputs, listSpeechTranscriptions, stopServer } from "./services/api";
+import { cleanupCandidates, formatBytes, getCleanupCandidates, getDiagnostics, getHardwareSpecs, getHealth, getTelemetry, getBackendOptions, getBackendStatus, listGeneratedOutputs, listSpeechTranscriptions, deleteSpeechTranscription, stopServer } from "./services/api";
 import "./App.css";
 
 function App() {
@@ -160,6 +160,29 @@ function App() {
     localStorage.setItem("textSettings", JSON.stringify(textSettings));
   }, [textSettings]);
 
+  const [speechSettings, setSpeechSettings] = useState(() => {
+    const saved = localStorage.getItem("speechSettings");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        return {
+          language: parsed.language || "auto",
+          threads: Math.max(1, Math.min(32, Number(parsed.threads) || Math.max(1, Math.min(8, navigator.hardwareConcurrency || 4)))),
+          translate: parsed.translate === true,
+        };
+      } catch (_) {}
+    }
+    return {
+      language: "auto",
+      threads: Math.max(1, Math.min(8, navigator.hardwareConcurrency || 4)),
+      translate: false,
+    };
+  });
+
+  useEffect(() => {
+    localStorage.setItem("speechSettings", JSON.stringify(speechSettings));
+  }, [speechSettings]);
+
   // Lifted Chat History States
   const [conversations, setConversations] = useState([]);
   const [activeConversationId, setActiveConversationId] = useState(null);
@@ -256,6 +279,37 @@ function App() {
       setSpeechTranscriptions([]);
     }
   }, []);
+
+  const handleDeleteSpeechTranscription = useCallback(async (item, e) => {
+    if (e) e.stopPropagation();
+    const itemId = item.filename || item.metadata || item.textFile;
+    if (!itemId) return;
+
+    const ok = await showConfirm({
+      title: "Delete Transcription",
+      message: `Are you sure you want to delete "${item.displayName || item.sourceFilename || "this transcription"}"? This action cannot be undone.`,
+      confirmLabel: "Delete",
+      danger: true
+    });
+    if (!ok) return;
+
+    try {
+      await deleteSpeechTranscription(itemId);
+      
+      setSelectedSpeechTranscript((prev) => {
+        if (prev) {
+          const prevId = prev.filename || prev.metadata || prev.textFile;
+          if (prevId === itemId) return null;
+        }
+        return prev;
+      });
+
+      refreshSpeechTranscriptions();
+    } catch (err) {
+      console.error("Failed to delete speech transcription:", err);
+      showAlert({ title: "Delete Failed", message: err.message || String(err), danger: true });
+    }
+  }, [showConfirm, showAlert, setSelectedSpeechTranscript, refreshSpeechTranscriptions]);
 
   useEffect(() => {
     refreshSpeechTranscriptions();
@@ -510,8 +564,9 @@ function App() {
       setSelectedSpeechTranscript={setSelectedSpeechTranscript}
       showSpeechHistory={showSpeechHistory}
       setShowSpeechHistory={setShowSpeechHistory}
+      onDeleteSpeechTranscription={handleDeleteSpeechTranscription}
     />
-  ), [activeTab, specs, conversations, activeConversationId, showHistory, handleDeleteConversation, speechTranscriptions, selectedSpeechTranscript, showSpeechHistory]);
+  ), [activeTab, specs, conversations, activeConversationId, showHistory, handleDeleteConversation, speechTranscriptions, selectedSpeechTranscript, showSpeechHistory, handleDeleteSpeechTranscription]);
 
   const handleStopServer = useCallback(async () => {
     if (!serverRunning || isStoppingServer) return;
@@ -613,6 +668,8 @@ function App() {
             showConfirm={showConfirm}
             selectedTranscript={selectedSpeechTranscript}
             onTranscriptionsChanged={refreshSpeechTranscriptions}
+            speechSettings={speechSettings}
+            setSpeechSettings={setSpeechSettings}
           />
         </div>
 
@@ -630,6 +687,8 @@ function App() {
             showConfirm={showConfirm}
             textSettings={textSettings}
             setTextSettings={setTextSettings}
+            speechSettings={speechSettings}
+            setSpeechSettings={setSpeechSettings}
             health={health}
             cleanupItems={cleanupItems}
             isReadinessBusy={isReadinessBusy}

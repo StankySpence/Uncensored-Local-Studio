@@ -4,7 +4,9 @@ import { Image, FolderDown, MessageSquare, Mic, Settings, Shield, Terminal, Chev
 function formatSidebarDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleDateString();
+  const dateStr = date.toLocaleDateString();
+  const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+  return `${dateStr} ${timeStr}`;
 }
 
 function Sidebar({ 
@@ -21,7 +23,8 @@ function Sidebar({
   selectedSpeechTranscript,
   setSelectedSpeechTranscript,
   showSpeechHistory,
-  setShowSpeechHistory
+  setShowSpeechHistory,
+  onDeleteSpeechTranscription
 }) {
   return (
     <div className="sidebar">
@@ -227,8 +230,9 @@ function Sidebar({
                         }}
                         style={{
                           display: "flex",
-                          flexDirection: "column",
-                          gap: "2px",
+                          flexDirection: "row",
+                          alignItems: "center",
+                          justifyContent: "space-between",
                           padding: "7px 8px 7px 10px",
                           borderRadius: "var(--md-shape-corner-small)",
                           fontSize: "0.78rem",
@@ -241,14 +245,36 @@ function Sidebar({
                         className="sidebar-history-item"
                         title={title}
                       >
-                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: isActive ? 600 : 400 }}>
-                          {title}
-                        </span>
-                        {date && (
-                          <span style={{ fontSize: "0.68rem", opacity: 0.72, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {date}
+                        <div style={{ display: "flex", flexDirection: "column", gap: "2px", flex: 1, minWidth: 0 }}>
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: isActive ? 600 : 400 }}>
+                            {title}
                           </span>
-                        )}
+                          {date && (
+                            <span style={{ fontSize: "0.68rem", opacity: 0.72, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {date}
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteSpeechTranscription?.(item, e);
+                          }}
+                          style={{
+                            background: "none",
+                            border: "none",
+                            color: "var(--md-sys-color-outline)",
+                            cursor: "pointer",
+                            padding: "2px",
+                            marginLeft: "6px",
+                            display: "flex",
+                            alignItems: "center"
+                          }}
+                          className="sidebar-history-delete"
+                          title="Delete Transcription"
+                        >
+                          <Trash2 size={12} />
+                        </button>
                       </div>
                     );
                   })

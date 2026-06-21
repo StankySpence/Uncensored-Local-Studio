@@ -1821,6 +1821,9 @@ function transcribeWavBuffer(buffer, options = {}) {
     } else {
       args.push("-l", "auto");
     }
+    if (options.translate) {
+      args.push("-tr");
+    }
 
     const startedAt = Date.now();
     console.log("  [speech] Starting:", backend.cli, args.join(" "));
@@ -4664,7 +4667,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.url === "/api/speech/stop" && req.method === "POST") {
-    await runExclusiveSpeechOperation(() => stopSpeech());
+    await stopSpeech();
     return json(res, 200, { ok: true });
   }
 
@@ -4677,6 +4680,7 @@ const server = http.createServer(async (req, res) => {
         language: parsed.searchParams.get("language") || "auto",
         filename: parsed.searchParams.get("filename") || req.headers["x-filename"] || "recording.wav",
         threads: parsed.searchParams.get("threads") || speechSettings.threads,
+        translate: parsed.searchParams.get("translate") === "true",
       }));
       return json(res, 200, { ok: true, transcription: result });
     } catch (err) {
@@ -4730,6 +4734,41 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === "/api/speech/transcriptions" && req.method === "GET") {
     return json(res, 200, { ok: true, transcriptions: listTranscriptions() });
+  }
+
+  if (req.url === "/api/speech/delete-transcription" && req.method === "POST") {
+    const body = await readJsonBody(req, res);
+    if (!body) return;
+    const filename = path.basename(String(body.filename || ""));
+    if (!filename || !filename.endsWith(".json")) {
+      return json(res, 400, { ok: false, error: "Invalid filename" });
+    }
+    const jsonPath = path.join(TRANSCRIPTIONS, filename);
+    if (!pathInside(jsonPath, TRANSCRIPTIONS)) {
+      return json(res, 400, { ok: false, error: "Invalid path" });
+    }
+    try {
+      if (!fs.existsSync(jsonPath)) {
+        return json(res, 404, { ok: false, error: "Transcription metadata not found" });
+      }
+      
+      const metadata = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+      const textFile = metadata.textFile ? path.basename(String(metadata.textFile)) : "";
+      
+      fs.unlinkSync(jsonPath);
+      
+      if (textFile) {
+        const textPath = path.join(TRANSCRIPTIONS, textFile);
+        if (pathInside(textPath, TRANSCRIPTIONS) && fs.existsSync(textPath)) {
+          fs.unlinkSync(textPath);
+        }
+      }
+      
+      return json(res, 200, { ok: true });
+    } catch (err) {
+      console.error("  [api] Failed to delete transcription:", err);
+      return json(res, 500, { ok: false, error: err.message });
+    }
   }
 
 function isOomError(msg) {

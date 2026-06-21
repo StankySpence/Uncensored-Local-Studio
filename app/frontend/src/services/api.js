@@ -609,6 +609,7 @@ export async function transcribeSpeech(fileOrBlob, options = {}) {
   if (options.language) params.set("language", options.language);
   if (options.filename) params.set("filename", options.filename);
   if (options.threads) params.set("threads", String(options.threads));
+  if (options.translate) params.set("translate", "true");
 
   const res = await fetch(`/api/speech/transcribe?${params.toString()}`, {
     method: "POST",
@@ -651,6 +652,15 @@ export async function listSpeechTranscriptions() {
   const res = await fetch("/api/speech/transcriptions");
   const data = await readJsonResponse(res, "The local server returned invalid transcription history.");
   return data.transcriptions || [];
+}
+
+export async function deleteSpeechTranscription(filename) {
+  const res = await fetch("/api/speech/delete-transcription", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename }),
+  });
+  return await readJsonResponse(res, "The local server returned an invalid speech transcription delete response.");
 }
 
 export async function getLlmRecommendations(useCase = "chat", limit = 10) {

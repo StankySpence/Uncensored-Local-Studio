@@ -115,27 +115,41 @@ function normalizeTimestamp(value) {
   return "";
 }
 
-function formatTranscriptWithTimes(transcription) {
+function formatTranscriptText(transcription, showTimestamps) {
   const segments = transcription?.raw?.transcription;
   if (!Array.isArray(segments) || segments.length === 0) {
     return transcription?.text || "";
   }
   return segments
     .map((segment) => {
-      const time = normalizeTimestamp(segment.timestamps);
       const text = String(segment.text || "").trim();
+      if (!showTimestamps) return text;
+      const time = normalizeTimestamp(segment.timestamps);
       return time ? `[${time}] ${text}` : text;
     })
     .filter(Boolean)
     .join("\n");
 }
 
-export default function SpeechTranscriber({ showAlert, showConfirm, selectedTranscript, onTranscriptionsChanged }) {
+export default function SpeechTranscriber({
+  showAlert,
+  showConfirm,
+  selectedTranscript,
+  onTranscriptionsChanged,
+  speechSettings,
+  setSpeechSettings,
+}) {
   const [status, setStatus] = useState({ ready: false, running: false, backendInstalled: false, settings: {} });
   const [models, setModels] = useState([]);
   const [selectedModel, setSelectedModel] = useState("");
-  const [language, setLanguage] = useState("auto");
-  const [threads, setThreads] = useState(Math.max(1, Math.min(8, navigator.hardwareConcurrency || 4)));
+
+  const language = speechSettings?.language || "auto";
+  const threads = speechSettings?.threads || 4;
+  const translate = speechSettings?.translate === true;
+
+  const setLanguage = (val) => setSpeechSettings((prev) => ({ ...prev, language: val }));
+  const setThreads = (val) => setSpeechSettings((prev) => ({ ...prev, threads: val }));
+
   const [audioBlob, setAudioBlob] = useState(null);
   const [audioName, setAudioName] = useState("");
   const [audioUrl, setAudioUrl] = useState("");
@@ -143,11 +157,18 @@ export default function SpeechTranscriber({ showAlert, showConfirm, selectedTran
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [result, setResult] = useState(null);
   const [resultText, setResultText] = useState("");
+  const [showTimestamps, setShowTimestamps] = useState(false);
   const [isLoadingModel, setIsLoadingModel] = useState(false);
   const recorderRef = useRef(null);
   const abortRef = useRef(null);
 
   const installedModels = useMemo(() => models.filter((model) => model.installed), [models]);
+
+  const isEnglishOnly = useMemo(() => {
+    if (!selectedModel) return false;
+    const model = models.find((m) => m.filename === selectedModel);
+    return model?.language === "English" || selectedModel.toLowerCase().includes(".en");
+  }, [selectedModel, models]);
 
   const refresh = useCallback(async () => {
     const [nextStatus, nextModels] = await Promise.all([
@@ -169,13 +190,21 @@ export default function SpeechTranscriber({ showAlert, showConfirm, selectedTran
 
   useEffect(() => {
     refresh().catch((err) => showAlert?.({ title: "Speech Status Failed", message: err.message || String(err), danger: true }));
+    const interval = setInterval(() => {
+      refresh().catch(() => {});
+    }, 2000);
+    return () => clearInterval(interval);
   }, [refresh, showAlert]);
 
   useEffect(() => {
     if (!selectedTranscript) return;
     setResult(selectedTranscript);
-    setResultText(formatTranscriptWithTimes(selectedTranscript));
   }, [selectedTranscript]);
+
+  useEffect(() => {
+    if (!result) return;
+    setResultText(formatTranscriptText(result, showTimestamps));
+  }, [result, showTimestamps]);
 
   useEffect(() => {
     return () => {
@@ -272,19 +301,33 @@ export default function SpeechTranscriber({ showAlert, showConfirm, selectedTran
     abortRef.current = controller;
     try {
       if (!status.ready || status.settings?.model !== selectedModel) {
-        await startSpeech(selectedModel, { language, threads });
+        setIsLoadingModel(true);
+        try {
+          await startSpeech(selectedModel, { language, threads });
+          await refresh();
+        } finally {
+          setIsLoadingModel(false);
+        }
       }
       const transcription = await transcribeSpeech(audioBlob, {
         model: selectedModel,
         language,
         threads,
+        translate,
         filename: audioName || "audio.wav",
         signal: controller.signal,
       });
       setResult(transcription);
-      setResultText(formatTranscriptWithTimes(transcription));
       await refresh();
       await onTranscriptionsChanged?.();
+
+      if (transcription?.text?.toLowerCase().includes("foreign language")) {
+        showAlert?.({
+          title: "Foreign Language Detected",
+          message: "The loaded model is English-only and cannot transcribe non-English speech. Please download and load a Multilingual model (e.g. Whisper Base Multilingual) from the Model Manager to transcribe this audio.",
+          danger: false,
+        });
+      }
     } catch (err) {
       if (err.name !== "AbortError") {
         showAlert?.({ title: "Transcription Failed", message: err.message || String(err), danger: true });
@@ -361,12 +404,23 @@ export default function SpeechTranscriber({ showAlert, showConfirm, selectedTran
               />
             </label>
           </div>
+          <div style={{ marginTop: "10px", paddingLeft: "2px" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.82rem", cursor: "pointer", color: "var(--md-sys-color-on-surface)" }}>
+              <input
+                type="checkbox"
+                checked={translate}
+                onChange={(event) => setSpeechSettings((prev) => ({ ...prev, translate: event.target.checked }))}
+                style={{ cursor: "pointer", width: "15px", height: "15px" }}
+              />
+              <span>Translate to English</span>
+            </label>
+          </div>
 
           <div className="speech-button-row">
             <button
               className="m3-btn m3-btn-filled"
               onClick={handleLoadSpeechModel}
-              disabled={!selectedModel || isLoadingModel || (status.ready && status.settings?.model === selectedModel)}
+              disabled={!selectedModel || isLoadingModel || isTranscribing || (status.ready && status.settings?.model === selectedModel)}
             >
               {isLoadingModel ? <LoaderCircle className="progress-spinner" size={14} /> : <Play size={14} />}
               <span>{status.ready && status.settings?.model === selectedModel ? "Loaded" : isLoadingModel ? "Loading" : "Load"}</span>
@@ -450,6 +504,15 @@ export default function SpeechTranscriber({ showAlert, showConfirm, selectedTran
         <div className="speech-panel-header">
           <h3>Transcript</h3>
           <div className="speech-button-row">
+            <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.78rem", cursor: "pointer", userSelect: "none", color: "var(--md-sys-color-on-surface-variant)", marginRight: "12px" }}>
+              <input
+                type="checkbox"
+                checked={showTimestamps}
+                onChange={(e) => setShowTimestamps(e.target.checked)}
+                style={{ width: "14px", height: "14px", cursor: "pointer" }}
+              />
+              <span>Show Timestamps</span>
+            </label>
             <button className="m3-btn m3-btn-outlined" onClick={saveText} disabled={!resultText.trim()}>
               <Save size={14} />
               <span>TXT</span>

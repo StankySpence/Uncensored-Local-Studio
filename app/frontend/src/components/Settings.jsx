@@ -3,7 +3,7 @@ import {
   Crop, Sliders, Cpu, Info, MessageSquare, SlidersHorizontal, Zap,
   ChevronDown, Image, Type, Settings2, Gauge, Brain, Sparkles,
   Monitor, HardDrive, MemoryStick, Thermometer, Hash, Layers,
-  ChevronRight, Box, Wand2, Lightbulb, RotateCcw, Check, Palette
+  ChevronRight, Box, Wand2, Lightbulb, RotateCcw, Check, Palette, Volume2
 } from "lucide-react";
 import { stopServer, formatBytes, getLlmBackends, getLlmStats, getLlmStatus, benchmarkLlm, startLlm, stopLlm } from "../services/api";
 import { THEMES } from "../themes";
@@ -146,18 +146,49 @@ function PremiumToggle({ checked, onChange, label, description }) {
 }
 
 // ─── Section Header Component ───
-function SectionHeader({ icon: Icon, title, count, color }) {
+function SectionHeader({ icon: Icon, title, count, color, isExpanded, onToggle }) {
   return (
-    <div className="settings-section-header" style={{ borderLeftColor: color }}>
-      <div className="settings-section-icon" style={{ background: color + "15", color }}>
-        <Icon size={22} />
-      </div>
-      <div>
+    <div
+      className="settings-section-header"
+      style={{
+        borderLeftColor: color,
+        cursor: "pointer",
+        userSelect: "none",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+      }}
+      onClick={onToggle}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onToggle();
+        }
+      }}
+      aria-expanded={isExpanded}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: "14px", flex: 1 }}>
+        <div className="settings-section-icon" style={{ background: color + "15", color }}>
+          <Icon size={22} />
+        </div>
         <div className="settings-section-title">{title}</div>
       </div>
-      {count && (
-        <span className="settings-section-count">{count} settings</span>
-      )}
+      <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+        {count && (
+          <span className="settings-section-count">{count} settings</span>
+        )}
+        <ChevronDown
+          size={20}
+          style={{
+            transform: isExpanded ? "rotate(180deg)" : "rotate(0deg)",
+            transition: "transform 0.3s var(--md-transition-easing)",
+            color: isExpanded ? "var(--md-sys-color-primary)" : "var(--md-sys-color-outline)",
+            flexShrink: 0
+          }}
+        />
+      </div>
     </div>
   );
 }
@@ -174,6 +205,8 @@ function Settings({
   setActiveModel,
   textSettings,
   setTextSettings,
+  speechSettings,
+  setSpeechSettings,
   showAlert = async ({ message }) => window.alert(message),
   showConfirm = async ({ message }) => window.confirm(message),
   health,
@@ -190,6 +223,23 @@ function Settings({
   const [llmBackends, setLlmBackends] = useState({ available: [], candidates: [] });
   const [llmStats, setLlmStats] = useState({ benchmarks: [] });
   const [benchmarkBusy, setBenchmarkBusy] = useState(false);
+
+  const [expandedSections, setExpandedSections] = useState(() => {
+    return {
+      appearance: localStorage.getItem("settings_section_appearance") === "true",
+      image: localStorage.getItem("settings_section_image") === "true",
+      text: localStorage.getItem("settings_section_text") === "true",
+      speech: localStorage.getItem("settings_section_speech") === "true",
+    };
+  });
+
+  const toggleSection = (section) => {
+    setExpandedSections((prev) => {
+      const nextState = !prev[section];
+      localStorage.setItem(`settings_section_${section}`, String(nextState));
+      return { ...prev, [section]: nextState };
+    });
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -235,6 +285,13 @@ function Settings({
 
   const updateTextSetting = (key, value) => {
     setTextSettings((prev) => ({
+      ...prev,
+      [key]: value
+    }));
+  };
+
+  const updateSpeechSetting = (key, value) => {
+    setSpeechSettings((prev) => ({
       ...prev,
       [key]: value
     }));
@@ -400,16 +457,20 @@ function Settings({
   };
 
   // ─── Image Settings ───
-  const ImageSettings = () => (
+  const renderImageSettings = () => (
     <>
       <SectionHeader 
         icon={Image} 
         title="Image Generation" 
         count={4}
         color="#3b82f6"
+        isExpanded={expandedSections.image}
+        onToggle={() => toggleSection("image")}
       />
       
-      <div className="settings-two-column">
+      {expandedSections.image && (
+        <div className="settings-expanded-content">
+          <div className="settings-two-column">
         {/* Left Column */}
         <div className="settings-column">
           {/* Size & Shape */}
@@ -524,7 +585,7 @@ function Settings({
                   min="1"
                   max={isOpenVinoNpu ? "8" : "60"}
                 />
-                <span style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)" }}>
+                <span className="settings-option-desc">
                   {isOpenVinoNpu
                     ? "LCM OpenVINO: 1-8 fast steps"
                     : "More steps = sharper details, longer time"}
@@ -611,21 +672,27 @@ function Settings({
             </div>
           </div>
         </div>
-      </div>
+          </div>
+        </div>
+      )}
     </>
   );
 
   // ─── Text Settings ───
-  const TextSettings = () => (
+  const renderTextSettings = () => (
     <>
       <SectionHeader 
         icon={Type} 
         title="Text Generation" 
         count={5}
         color="#8b5cf6"
+        isExpanded={expandedSections.text}
+        onToggle={() => toggleSection("text")}
       />
       
-      <div className="settings-two-column">
+      {expandedSections.text && (
+        <div className="settings-expanded-content">
+          <div className="settings-two-column">
         {/* Left Column */}
         <div className="settings-column">
           {/* Model & Context */}
@@ -638,13 +705,16 @@ function Settings({
               <div className="m3-text-field">
                 <label className="m3-text-field-label">System Prompt</label>
                 <textarea
-                  className="m3-input"
-                  value={textSettings.systemPrompt || ""}
-                  onChange={(e) => updateTextSetting("systemPrompt", e.target.value)}
-                  placeholder="Enter system prompt..."
-                  rows={3}
-                  style={{ resize: "vertical", minHeight: "60px" }}
+                   className="m3-input"
+                   value={textSettings.systemPrompt || ""}
+                   onChange={(e) => updateTextSetting("systemPrompt", e.target.value)}
+                   placeholder="Enter system prompt..."
+                   rows={3}
+                   style={{ resize: "vertical", minHeight: "60px" }}
                 />
+                <span className="settings-option-desc" style={{ marginTop: "4px", display: "block" }}>
+                  Defines assistant personality/instructions. (Recommended: Default)
+                </span>
               </div>
 
               <div className="m3-slider-group">
@@ -661,8 +731,8 @@ function Settings({
                   max="32768"
                   step="512"
                 />
-                <span style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)" }}>
-                  0 = Auto (model default)
+                <span className="settings-option-desc">
+                  Model memory limit. 0 uses default limit. (Recommended: 0)
                 </span>
               </div>
             </div>
@@ -689,39 +759,11 @@ function Settings({
                   max="2"
                   step="0.1"
                 />
+                <span className="settings-option-desc">
+                  Controls creativity. Lower = focused & factual, Higher = creative & diverse. (Recommended: 0.7)
+                </span>
               </div>
 
-              <div className="m3-slider-group">
-                <div className="m3-slider-header">
-                  <span className="m3-slider-label">Top P</span>
-                  <span className="settings-value-badge">{textSettings.topP}</span>
-                </div>
-                <input
-                  type="range"
-                  className="m3-slider"
-                  value={textSettings.topP}
-                  onChange={(e) => updateTextSetting("topP", parseFloat(e.target.value))}
-                  min="0"
-                  max="1"
-                  step="0.05"
-                />
-              </div>
-
-              <div className="m3-slider-group">
-                <div className="m3-slider-header">
-                  <span className="m3-slider-label">Top K</span>
-                  <span className="settings-value-badge">{textSettings.topK}</span>
-                </div>
-                <input
-                  type="range"
-                  className="m3-slider"
-                  value={textSettings.topK}
-                  onChange={(e) => updateTextSetting("topK", parseInt(e.target.value))}
-                  min="1"
-                  max="100"
-                  step="1"
-                />
-              </div>
 
               <div className="m3-slider-group">
                 <div className="m3-slider-header">
@@ -744,55 +786,30 @@ function Settings({
                     </button>
                   ))}
                 </div>
-                <input
-                  type="range"
-                  className="m3-slider"
-                  value={textSettings.maxTokens || 1024}
-                  onChange={(e) => updateTextSetting("maxTokens", parseInt(e.target.value))}
-                  min="64"
-                  max="4096"
-                  step="64"
-                  disabled={(textSettings.responseTokenMode || "auto") === "auto"}
-                />
-                <span style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)" }}>
-                  Auto uses remaining context with a safety buffer. Manual uses the slider value.
-                </span>
-              </div>
-
-              <div className="m3-slider-group">
-                <div className="m3-slider-header">
-                  <span className="m3-slider-label">Min P</span>
-                  <span className="settings-value-badge">{textSettings.minP}</span>
-                </div>
-                <input
-                  type="range"
-                  className="m3-slider"
-                  value={textSettings.minP}
-                  onChange={(e) => updateTextSetting("minP", parseFloat(e.target.value))}
-                  min="0"
-                  max="1"
-                  step="0.01"
-                />
-              </div>
-
-              <div className="m3-slider-group">
-                <div className="m3-slider-header">
-                  <span className="m3-slider-label">Repeat Penalty</span>
-                  <span className="settings-value-badge">{textSettings.repeatPenalty}</span>
-                </div>
-                <input
-                  type="range"
-                  className="m3-slider"
-                  value={textSettings.repeatPenalty}
-                  onChange={(e) => updateTextSetting("repeatPenalty", parseFloat(e.target.value))}
-                  min="1"
-                  max="2"
-                  step="0.05"
-                />
+                {(textSettings.responseTokenMode || "auto") === "manual" ? (
+                  <>
+                    <input
+                      type="range"
+                      className="m3-slider"
+                      value={textSettings.maxTokens || 1024}
+                      onChange={(e) => updateTextSetting("maxTokens", parseInt(e.target.value))}
+                      min="64"
+                      max="4096"
+                      step="64"
+                    />
+                    <span className="settings-option-desc">
+                      Manual uses the slider value.
+                    </span>
+                  </>
+                ) : (
+                  <span className="settings-option-desc">
+                    Auto adjusts length dynamically based on context window. (Recommended)
+                  </span>
+                )}
               </div>
 
               <div className="m3-text-field">
-                <label className="m3-text-field-label">Seed (-1 = Random)</label>
+                <label className="m3-text-field-label">Seed</label>
                 <input
                   type="number"
                   className="m3-input"
@@ -800,6 +817,9 @@ function Settings({
                   onChange={(e) => updateTextSetting("seed", parseInt(e.target.value) || -1)}
                   placeholder="-1"
                 />
+                <span className="settings-option-desc" style={{ marginTop: "4px", display: "block" }}>
+                  Controls repeatability. Use -1 for random, positive integer for identical replies. (Recommended: -1)
+                </span>
               </div>
             </div>
           </div>
@@ -862,7 +882,7 @@ function Settings({
                   min="0"
                   max="50"
                 />
-                <span style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)" }}>
+                <span className="settings-option-desc">
                   50 = All layers on GPU
                 </span>
               </div>
@@ -905,105 +925,132 @@ function Settings({
             </div>
           </div>
 
-          {/* Thinking & Reasoning */}
-          <div className="settings-subsection">
-            <div className="settings-subsection-title">
-              <Brain size={16} />
-              Thinking & Reasoning
-            </div>
-            <div className="m3-field-group">
-              <PremiumToggle
-                checked={textSettings.enableThinking !== false}
-                onChange={handleThinkingToggle}
-                label="DeepThink"
-                description={supportsThinking
-                  ? "Show model's reasoning process"
-                  : "Model does not support thinking"
-                }
-              />
-              {!supportsThinking && (
-                <div style={{
-                  padding: "10px 14px",
-                  borderRadius: "10px",
-                  background: "rgba(239, 68, 68, 0.08)",
-                  border: "1px solid rgba(239, 68, 68, 0.2)",
-                  fontSize: "0.8rem",
-                  color: "var(--md-sys-color-error)"
-                }}>
-                  <Info size={14} style={{ verticalAlign: "middle", marginRight: "6px" }} />
-                  Current model does not support thinking. Load a reasoning model to enable.
-                </div>
-              )}
-            </div>
-          </div>
 
-          {/* Text Backend */}
-          <div className="settings-subsection">
-            <div className="settings-subsection-title">
-              <Cpu size={16} />
-              Text Backend
-            </div>
-            <div className="m3-field-group">
-              <div style={{
-                padding: "12px 16px",
-                borderRadius: "12px",
-                background: "var(--md-sys-color-surface-variant)",
-                fontSize: "0.85rem",
-                color: "var(--md-sys-color-on-surface-variant)"
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
-                  <Monitor size={16} />
-                  <strong style={{ color: "var(--md-sys-color-on-surface)" }}>
-                    {llmStatus.ready ? "Running" : "Stopped"}
-                  </strong>
-                </div>
-                {llmStatus.ready && (
-                  <div style={{ fontSize: "0.8rem", lineHeight: "1.5" }}>
-                    Model: {llmStatus.settings?.model || "Unknown"}<br />
-                    Backend: {llmStatus.settings?.backendMode || "Unknown"}<br />
-                    Threads: {llmStatus.settings?.threads || "-"}<br />
-                    GPU Layers: {llmStatus.settings?.gpuLayers === -1 ? "All" : llmStatus.settings?.gpuLayers}
-                  </div>
-                )}
-                <div style={{ marginTop: "10px", fontSize: "0.78rem", lineHeight: "1.5" }}>
-                  Available: {(llmBackends.available || []).map((backend) => backend.key.toUpperCase()).join(", ") || "None"}<br />
-                  Fastest saved: {(() => {
-                    const model = llmStatus.settings?.model;
-                    const winner = (llmStats.benchmarks || []).find((item) => item.ok && (!model || item.model === model));
-                    return winner
-                      ? `${winner.backendMode} (${Number(winner.predicted_per_second || 0).toFixed(1)} tok/s)`
-                      : "Not benchmarked";
-                  })()}
-                </div>
-                <button
-                  className="m3-button secondary"
-                  type="button"
-                  onClick={handleBenchmarkTextBackend}
-                  disabled={benchmarkBusy || !llmStatus.ready}
-                  style={{ marginTop: "12px", width: "100%", justifyContent: "center" }}
-                >
-                  <Gauge size={15} />
-                  {benchmarkBusy ? "Benchmarking..." : "Benchmark Text Backends"}
-                </button>
-              </div>
-            </div>
+        </div>
           </div>
         </div>
-      </div>
+      )}
     </>
   );
 
+  // ─── Speech Settings ───
+  const renderSpeechSettings = () => {
+    const SPEECH_LANGUAGES = [
+      { value: "auto", label: "Auto detect" },
+      { value: "en", label: "English" },
+      { value: "es", label: "Spanish" },
+      { value: "fr", label: "French" },
+      { value: "de", label: "German" },
+      { value: "it", label: "Italian" },
+      { value: "pt", label: "Portuguese" },
+      { value: "hi", label: "Hindi" },
+      { value: "ja", label: "Japanese" },
+      { value: "ko", label: "Korean" },
+      { value: "zh", label: "Chinese" },
+    ];
+
+    return (
+      <>
+        <SectionHeader 
+          icon={Volume2} 
+          title="Speech Transcription" 
+          count={3}
+          color="#10b981"
+          isExpanded={expandedSections.speech}
+          onToggle={() => toggleSection("speech")}
+        />
+        
+        {expandedSections.speech && (
+          <div className="settings-expanded-content">
+            <div className="settings-two-column">
+              {/* Left Column */}
+              <div className="settings-column">
+                {/* Speech Parameters */}
+                <div className="settings-subsection">
+                  <div className="settings-subsection-title">
+                    <Volume2 size={16} />
+                    Transcription Settings
+                  </div>
+                  <div className="m3-field-group">
+                    <div className="m3-text-field">
+                      <label className="m3-text-field-label">Default Language</label>
+                      <select 
+                        className="m3-input" 
+                        value={speechSettings.language || "auto"} 
+                        onChange={(e) => updateSpeechSetting("language", e.target.value)}
+                      >
+                        {SPEECH_LANGUAGES.map((item) => (
+                          <option key={item.value} value={item.value}>
+                            {item.label}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="settings-option-desc" style={{ marginTop: "4px", display: "block" }}>
+                        Default language for transcribing audio. (Recommended: Auto detect)
+                      </span>
+                    </div>
+
+                    <div className="m3-slider-group">
+                      <div className="m3-slider-header">
+                        <span className="m3-slider-label">CPU Threads</span>
+                        <span className="settings-value-badge">{speechSettings.threads || 4}</span>
+                      </div>
+                      <input
+                        type="range"
+                        className="m3-slider"
+                        value={speechSettings.threads || 4}
+                        onChange={(e) => updateSpeechSetting("threads", parseInt(e.target.value))}
+                        min="1"
+                        max={specs?.cpu_cores_logical || 16}
+                      />
+                      <span className="settings-option-desc">
+                        Number of threads to allocate for transcription. (Recommended: 4)
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Column */}
+              <div className="settings-column">
+                {/* Translation options */}
+                <div className="settings-subsection">
+                  <div className="settings-subsection-title">
+                    <Sparkles size={16} />
+                    Translation Settings
+                  </div>
+                  <div className="m3-field-group">
+                    <PremiumToggle
+                      checked={speechSettings.translate === true}
+                      onChange={(val) => updateSpeechSetting("translate", val)}
+                      label="Translate to English"
+                      description="Auto-translate foreign languages to English during transcription"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  };
+
   // ─── Appearance Settings ───
-  const AppearanceSettings = () => (
+  const renderAppearanceSettings = () => (
     <>
       <SectionHeader 
         icon={Palette} 
         title="Appearance & Themes" 
         count={THEMES.length}
         color="var(--md-sys-color-primary)"
+        isExpanded={expandedSections.appearance}
+        onToggle={() => toggleSection("appearance")}
       />
       
-      <div className="settings-subsection" style={{ marginBottom: "28px" }}>
+      {expandedSections.appearance && (
+        <div className="settings-expanded-content">
+          <div className="settings-subsection" style={{ marginBottom: "28px" }}>
         <div className="settings-subsection-title">
           <Palette size={16} />
           Color Themes
@@ -1070,35 +1117,33 @@ function Settings({
           })}
         </div>
       </div>
+      </div>
+      )}
     </>
   );
 
   return (
     <div className="workspace-area">
       {/* Page Header */}
-      <div className="settings-page-header">
-        <div>
-          <div className="settings-page-title">
-            <Settings2 size={24} style={{ color: "var(--md-sys-color-primary)" }} />
-            Settings & Parameters
-          </div>
-          <div className="settings-page-subtitle">
-            Configure your AI models for optimal performance
-          </div>
-        </div>
+      <div className="workspace-title-section">
+        <h2 className="workspace-title">Settings & Parameters</h2>
+        <p className="workspace-subtitle">
+          Configure your AI models for optimal performance.
+        </p>
       </div>
 
-      {/* Hardware Tier Badge */}
-      <HardwareTierBadge specs={specs} />
 
       {/* Appearance & Themes Section */}
-      <AppearanceSettings />
+      {renderAppearanceSettings()}
 
       {/* Image Settings Section */}
-      <ImageSettings />
+      {renderImageSettings()}
 
       {/* Text Settings Section */}
-      <TextSettings />
+      {renderTextSettings()}
+
+      {/* Speech Settings Section */}
+      {renderSpeechSettings()}
     </div>
   );
 }

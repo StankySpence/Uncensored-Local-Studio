@@ -3349,6 +3349,14 @@ html[data-theme^="dark"] .settings-section-header:hover {
   transition: all 0.3s ease;
 }
 
+.settings-option-desc {
+  font-size: 0.75rem;
+  color: var(--md-sys-color-outline);
+  font-weight: 300;
+  opacity: 0.85;
+  line-height: 1.4;
+}
+
 .settings-subsection:hover {
   box-shadow: 0 12px 40px rgba(15, 23, 42, 0.08);
   border-color: color-mix(in srgb, var(--md-sys-color-primary) 15%, var(--md-sys-color-card-border));
@@ -3514,5 +3522,47 @@ html[data-theme^="dark"] .settings-subsection:hover {
   margin-top: 6px;
   font-weight: 500;
   opacity: 0.85;
+}
+
+.sidebar-history-delete {
+  transition: color 0.2s, background-color 0.2s, opacity 0.2s;
+  border-radius: 4px;
+  opacity: 0.6;
+}
+
+.sidebar-history-delete:hover {
+  color: var(--md-sys-color-error) !important;
+  background-color: rgba(239, 68, 68, 0.1) !important;
+  opacity: 1 !important;
+}
+
+.sidebar-history-item:hover .sidebar-history-delete {
+  opacity: 1;
+}
+
+/* Global modern scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--md-sys-color-outline) 25%, transparent);
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--md-sys-color-outline) 45%, transparent);
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--md-sys-color-outline) 25%, transparent) transparent;
+}
+
+.settings-expanded-content {
+  animation: fadeInSlide 0.3s var(--md-transition-easing);
 }
 
