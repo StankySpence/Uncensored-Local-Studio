@@ -1103,7 +1103,7 @@ function ModelManager({
   };
 
   const handleUnloadModel = async (runtimeOverride = null) => {
-    const runtime = runtimeOverride || getRuntimeForType(activeModelType);
+    const runtime = runtimeOverride?.type ? runtimeOverride : getRuntimeForType(activeModelType);
     if (!runtime || isUnloading) return;
 
     if (runtime.type === "image") {
@@ -1541,7 +1541,7 @@ function ModelManager({
                   
                   <div style={{ display: "flex", gap: "8px" }}>
                     {isActive ? (
-                      <button className="m3-btn m3-btn-error" style={{ height: "36px", padding: "0 16px" }} onClick={handleUnloadModel} disabled={isUnloading}>
+                      <button className="m3-btn m3-btn-error" style={{ height: "36px", padding: "0 16px" }} onClick={() => handleUnloadModel()} disabled={isUnloading}>
                         {isUnloading ? <RefreshCw className="progress-spinner" size={14} /> : <Trash2 size={14} />}
                         <span>{isUnloading ? "Unloading" : "Unload"}</span>
                       </button>
