@@ -1,6 +1,19 @@
 import React, { memo, useState, useRef, useEffect } from "react";
-import { Cpu, HardDrive, Database, Square, RefreshCw, Sun, Moon, Palette, Check, PanelLeftClose, PanelLeft } from "lucide-react";
+import { Square, RefreshCw, Sun, Moon, Palette, Check, PanelLeftClose, PanelLeft } from "lucide-react";
 import { THEMES } from "../themes";
+
+const truncateModelName = (name) => {
+  if (!name || typeof name !== "string") return "";
+  let cleanName = name;
+  if (name.includes("--")) {
+    const parts = name.split("--");
+    cleanName = parts[parts.length - 1];
+  }
+  if (cleanName.length > 25) {
+    return cleanName.substring(0, 22) + "...";
+  }
+  return cleanName;
+};
 
 function TopStatusBar({ 
   telemetry, 
@@ -65,11 +78,14 @@ function TopStatusBar({
           <span style={{ fontWeight: 600, fontSize: "0.95rem" }}>
             {getStatusText()}
           </span>
-          {activeModel && (
+          {(activeModel || (typeof isLlmLoaded === "string" && isLlmLoaded)) && (
             <>
               <span style={{ color: "var(--md-sys-color-outline-variant)" }}>|</span>
-              <span style={{ color: "var(--md-sys-color-primary)", fontWeight: 700 }}>
-                {activeModel}
+              <span 
+                style={{ color: "var(--md-sys-color-primary)", fontWeight: 700 }}
+                title={activeModel || isLlmLoaded}
+              >
+                {truncateModelName(activeModel || isLlmLoaded)}
               </span>
             </>
           )}
@@ -140,20 +156,17 @@ function TopStatusBar({
 
         {/* CPU Telemetry Chip */}
         <div className="telemetry-chip" title="CPU Utilization">
-          <Cpu className="telemetry-chip-icon" style={{ color: "var(--md-sys-color-primary)" }} />
           <span>CPU: {Number.isFinite(Number(telemetry.cpu_usage)) ? telemetry.cpu_usage : "--"}%</span>
         </div>
 
         {/* RAM Telemetry Chip */}
         <div className="telemetry-chip" title="System Memory Usage">
-          <HardDrive className="telemetry-chip-icon" style={{ color: "var(--md-sys-color-secondary)" }} />
           <span>RAM: {formatGb(telemetry.ram_used_gb)} / {formatGb(telemetry.ram_total_gb)} GB</span>
         </div>
 
         {/* GPU VRAM Telemetry Chip */}
         {telemetry.vram_total_gb > 0 && (
           <div className="telemetry-chip" title={`${telemetry.gpu_name} VRAM`}>
-            <Database className="telemetry-chip-icon" style={{ color: "var(--md-sys-color-tertiary)" }} />
             <span>VRAM: {formatGb(telemetry.vram_used_gb, { allowZero: true })} / {formatGb(telemetry.vram_total_gb)} GB</span>
           </div>
         )}

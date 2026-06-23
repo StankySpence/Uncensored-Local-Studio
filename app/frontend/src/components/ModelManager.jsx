@@ -332,6 +332,52 @@ function ModelManager({
   const displayedHuggingFaceModels = huggingFaceModels.filter((model) => (
     selectedFilters.every((filterId) => model.tags?.includes(filterId))
   ));
+
+  const getModelTypeLabel = (type) => {
+    if (type === "image") return "Image";
+    if (type === "text") return "Text";
+    if (type === "speech") return "Speech";
+    if (type === "tts") return "TTS";
+    return "Model";
+  };
+
+  const getRuntimeForType = (type) => {
+    if (type === "image" && serverRunning && activeModel) {
+      return { type: "image", model: activeModel, label: getModelTypeLabel("image") };
+    }
+    if (type === "text" && llmRunning && activeLlmModel) {
+      return { type: "text", model: activeLlmModel, label: getModelTypeLabel("text") };
+    }
+    if (type === "speech" && speechRunning && activeSpeechModel) {
+      return { type: "speech", model: activeSpeechModel, label: getModelTypeLabel("speech") };
+    }
+    if (type === "tts" && ttsRunning && activeTtsModel) {
+      return { type: "tts", model: activeTtsModel, label: getModelTypeLabel("tts") };
+    }
+    return null;
+  };
+
+  const getActiveHeavyRuntime = () => (
+    getRuntimeForType("image") ||
+    getRuntimeForType("text")
+  );
+
+  const blockLoadIfOtherRuntimeActive = (modelId, targetType) => {
+    if (targetType !== "image" && targetType !== "text") {
+      return false;
+    }
+
+    const runtime = getActiveHeavyRuntime();
+    if (!runtime || (runtime.type === targetType && runtime.model === modelId)) {
+      return false;
+    }
+    setPendingLoadModel({
+      modelId,
+      targetType,
+      activeRuntime: runtime,
+    });
+    return true;
+  };
   
   let visibleModelLibrary = [];
   if (activeModelType === "image") {
@@ -719,7 +765,11 @@ function ModelManager({
     }
   };
 
-  const checkVramAndLoad = async (modelId) => {
+  const checkVramAndLoad = async (modelId, options = {}) => {
+    if (!options.skipActiveGuard && blockLoadIfOtherRuntimeActive(modelId, "image")) {
+      return;
+    }
+
     const modelInfo = getLocalModelInfo(modelId);
     if (!modelInfo) {
       await performLoadModel(modelId);
@@ -791,117 +841,100 @@ function ModelManager({
     await performLoadModel(modelId);
   };
 
+  const loadTextModel = async (modelId) => {
+    setLoadingModelId(modelId);
+    setModelLoadProgress({
+      progress: 40,
+      phase: "Starting llama.cpp server...",
+      speed: "",
+      current: 0,
+      total: 0,
+      model: modelId,
+      backendMode: "",
+      backendBinary: "",
+      device: "",
+    });
+    try {
+      const cores = textSettings?.threads || specs?.cpu_cores_physical || 4;
+      const context = textSettings?.contextSize ?? 0;
+      await startLlm(modelId, {
+        threads: cores,
+        contextSize: context,
+        gpuLayers: -1
+      });
+      setActiveLlmModel(modelId);
+      setLlmRunning(true);
+    } catch (err) {
+      showAlert({ title: "Model Load Failed", message: err.message || String(err), danger: true });
+    } finally {
+      setModelLoadProgress(null);
+      setLoadingModelId(null);
+    }
+  };
+
+  const loadSpeechModel = async (modelId) => {
+    setLoadingModelId(modelId);
+    setModelLoadProgress({
+      progress: 30,
+      phase: "Starting whisper.cpp speech runtime...",
+      speed: "",
+      current: 0,
+      total: 0,
+      model: modelId,
+      backendMode: "",
+      backendBinary: "",
+      device: "",
+    });
+    try {
+      await startSpeech(modelId, { threads: textSettings?.threads || specs?.cpu_cores_physical || 4 });
+      setActiveSpeechModel(modelId);
+      setSpeechRunning(true);
+    } catch (err) {
+      showAlert({ title: "Speech Model Load Failed", message: err.message || String(err), danger: true });
+    } finally {
+      setModelLoadProgress(null);
+      setLoadingModelId(null);
+    }
+  };
+
+  const loadTtsModel = async (modelId) => {
+    setLoadingModelId(modelId);
+    setModelLoadProgress({
+      progress: 30,
+      phase: "Starting Kokoro ONNX TTS runtime...",
+      speed: "",
+      current: 0,
+      total: 0,
+      model: modelId,
+      backendMode: "",
+      backendBinary: "",
+      device: "",
+    });
+    try {
+      await startTts(modelId);
+      setActiveTtsModel(modelId);
+      setTtsRunning(true);
+    } catch (err) {
+      showAlert({ title: "TTS Model Load Failed", message: err.message || String(err), danger: true });
+    } finally {
+      setModelLoadProgress(null);
+      setLoadingModelId(null);
+    }
+  };
+
   const handleLoadModel = async (modelId) => {
+    if (blockLoadIfOtherRuntimeActive(modelId, activeModelType)) {
+      return;
+    }
+
     if (activeModelType === "image") {
-      if (activeModel && activeModel !== modelId && serverRunning) {
-        setPendingLoadModel(modelId);
-        return;
-      }
       await checkVramAndLoad(modelId);
     } else if (activeModelType === "text") {
-      setLoadingModelId(modelId);
-      setModelLoadProgress({
-        progress: 10,
-        phase: "Stopping image engine if running...",
-        speed: "",
-        current: 0,
-        total: 0,
-        model: modelId,
-        backendMode: "",
-        backendBinary: "",
-        device: "",
-      });
-      try {
-        await stopServer();
-        setModelLoadProgress({
-          progress: 40,
-          phase: "Starting llama.cpp server...",
-          speed: "",
-          current: 0,
-          total: 0,
-          model: modelId,
-          backendMode: "",
-          backendBinary: "",
-          device: "",
-        });
-        const cores = textSettings?.threads || specs?.cpu_cores_physical || 4;
-        const context = textSettings?.contextSize ?? 0;
-        const res = await startLlm(modelId, {
-          threads: cores,
-          contextSize: context,
-          gpuLayers: -1
-        });
-        setActiveLlmModel(modelId);
-        setLlmRunning(true);
-        setActiveModel(null);
-        setServerRunning(false);
-      } catch (err) {
-        showAlert({ title: "Model Load Failed", message: err.message || String(err), danger: true });
-      } finally {
-        setModelLoadProgress(null);
-        setLoadingModelId(null);
-      }
+      await loadTextModel(modelId);
     } else if (activeModelType === "speech") {
-      setLoadingModelId(modelId);
-      setModelLoadProgress({
-        progress: 30,
-        phase: "Starting whisper.cpp speech runtime...",
-        speed: "",
-        current: 0,
-        total: 0,
-        model: modelId,
-        backendMode: "",
-        backendBinary: "",
-        device: "",
-      });
-      try {
-        await stopServer();
-        await stopLlm();
-        await startSpeech(modelId, { threads: textSettings?.threads || specs?.cpu_cores_physical || 4 });
-        setActiveSpeechModel(modelId);
-        setSpeechRunning(true);
-        setActiveLlmModel(null);
-        setLlmRunning(false);
-        setActiveModel(null);
-        setServerRunning(false);
-      } catch (err) {
-        showAlert({ title: "Speech Model Load Failed", message: err.message || String(err), danger: true });
-      } finally {
-        setModelLoadProgress(null);
-        setLoadingModelId(null);
-      }
+      await loadSpeechModel(modelId);
     } else {
-      setLoadingModelId(modelId);
-      setModelLoadProgress({
-        progress: 30,
-        phase: "Starting Kokoro ONNX TTS runtime...",
-        speed: "",
-        current: 0,
-        total: 0,
-        model: modelId,
-        backendMode: "",
-        backendBinary: "",
-        device: "",
-      });
-      try {
-        await stopServer();
-        await stopLlm();
-        await stopSpeech();
-        await startTts(modelId);
-        setActiveTtsModel(modelId);
-        setTtsRunning(true);
-        setActiveSpeechModel(null);
-        setSpeechRunning(false);
-        setActiveLlmModel(null);
-        setLlmRunning(false);
-        setActiveModel(null);
-        setServerRunning(false);
-      } catch (err) {
-        showAlert({ title: "TTS Model Load Failed", message: err.message || String(err), danger: true });
-      } finally {
-        setModelLoadProgress(null);
-        setLoadingModelId(null);
-      }
+      await loadTtsModel(modelId);
     }
   };
 
@@ -947,11 +980,6 @@ function ModelManager({
       device: "",
     });
     try {
-      // Unload active text engine
-      await stopLlm();
-      setActiveLlmModel(null);
-      setLlmRunning(false);
-
       const modelInfo = getLocalModelInfo(modelId);
       const isCoreMLModel = modelInfo?.format === "CoreML" || modelInfo?.backendType === "apple-npu";
       const activeConstraints = forcedConstraints || constraints;
@@ -1050,16 +1078,35 @@ function ModelManager({
   };
 
   const handleUnloadThenLoad = async () => {
-    const nextModel = pendingLoadModel;
+    const pendingLoad = pendingLoadModel;
+    const nextModel = pendingLoad?.modelId;
+    const targetType = pendingLoad?.targetType;
     setPendingLoadModel(null);
-    await handleUnloadModel();
+    await handleUnloadModel(pendingLoad?.activeRuntime);
     if (nextModel) {
-      await checkVramAndLoad(nextModel);
+      if (targetType === "image") {
+        await checkVramAndLoad(nextModel, { skipActiveGuard: true });
+      } else if (targetType === "text") {
+        await loadTextModel(nextModel);
+      } else if (targetType === "speech") {
+        await loadSpeechModel(nextModel);
+      } else if (targetType === "tts") {
+        await loadTtsModel(nextModel);
+      }
     }
   };
 
-  const handleUnloadModel = async () => {
-    if (activeModelType === "image") {
+  const handleUnloadPendingOnly = async () => {
+    const pendingLoad = pendingLoadModel;
+    setPendingLoadModel(null);
+    await handleUnloadModel(pendingLoad?.activeRuntime);
+  };
+
+  const handleUnloadModel = async (runtimeOverride = null) => {
+    const runtime = runtimeOverride || getRuntimeForType(activeModelType);
+    if (!runtime || isUnloading) return;
+
+    if (runtime.type === "image") {
       if (isUnloading) return;
       setIsUnloading(true);
       setUnloadProgress({ progress: 10, phase: "Stopping backend process..." });
@@ -1097,7 +1144,7 @@ function ModelManager({
           setUnloadProgress({ progress: 0, phase: "" });
         }, 500);
       }
-    } else if (activeModelType === "text") {
+    } else if (runtime.type === "text") {
       setIsUnloading(true);
       setUnloadProgress({ progress: 50, phase: "Stopping llama.cpp backend process..." });
       try {
@@ -1110,7 +1157,7 @@ function ModelManager({
         setIsUnloading(false);
         setUnloadProgress({ progress: 0, phase: "" });
       }
-    } else if (activeModelType === "speech") {
+    } else if (runtime.type === "speech") {
       setIsUnloading(true);
       setUnloadProgress({ progress: 50, phase: "Stopping whisper.cpp speech runtime..." });
       try {
@@ -1811,18 +1858,18 @@ function ModelManager({
           <div className="m3-card" style={{ maxWidth: "460px", width: "100%", margin: 0, border: "1px solid var(--md-sys-color-outline-variant)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "10px" }}>
               <AlertTriangle size={22} style={{ color: "var(--md-sys-color-error)" }} />
-              <h3 style={{ fontSize: "1.05rem", fontWeight: 700 }}>Unload Current Model?</h3>
+              <h3 style={{ fontSize: "1.05rem", fontWeight: 700 }}>Model Already Active</h3>
             </div>
             <p style={{ fontSize: "0.9rem", color: "var(--md-sys-color-on-surface-variant)", lineHeight: 1.45, marginBottom: "16px" }}>
-              "{activeModel}" is already loaded. Unload it before loading "{pendingLoadModel}".
+              "{pendingLoadModel.activeRuntime?.model}" is already loaded as a {pendingLoadModel.activeRuntime?.label || "model"} model. Unload it before loading "{pendingLoadModel.modelId}" as a {getModelTypeLabel(pendingLoadModel.targetType)} model.
             </p>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
               <button className="m3-btn m3-btn-outlined" onClick={() => setPendingLoadModel(null)} disabled={isUnloading}>
                 Cancel
               </button>
-              <button className="m3-btn m3-btn-error" onClick={handleUnloadModel} disabled={isUnloading}>
+              <button className="m3-btn m3-btn-error" onClick={handleUnloadPendingOnly} disabled={isUnloading}>
                 <Trash2 size={14} />
-                <span>Unload Only</span>
+                <span>Unload</span>
               </button>
               <button className="m3-btn m3-btn-filled" onClick={handleUnloadThenLoad} disabled={isUnloading}>
                 {isUnloading ? <RefreshCw className="progress-spinner" size={14} /> : <RefreshCw size={14} />}

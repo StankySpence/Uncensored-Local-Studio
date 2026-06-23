@@ -279,6 +279,39 @@ let ttsGenerationState = {
   voice: "",
   output: "",
 };
+
+function modelName(value) {
+  return path.basename(String(value || ""));
+}
+
+function getActiveHeavyRuntime() {
+  if ((backendReady || backendProc || openvinoReady || openvinoProc) && currentSettings.model) {
+    return { type: "image", label: "Image", model: modelName(currentSettings.model) };
+  }
+  if ((llmReady || llmProc) && llmSettings.model) {
+    return { type: "text", label: "Text", model: modelName(llmSettings.model) };
+  }
+  return null;
+}
+
+function assertNoOtherActiveRuntime(targetType, targetModel) {
+  if (targetType !== "image" && targetType !== "text") return;
+
+  const runtime = getActiveHeavyRuntime();
+  const targetName = modelName(targetModel);
+  if (!runtime || (runtime.type === targetType && runtime.model === targetName)) return;
+
+  const err = new Error(`"${runtime.model}" is already loaded as a ${runtime.label} model. Unload it before loading "${targetName}".`);
+  err.statusCode = 409;
+  err.code = "MODEL_ALREADY_ACTIVE";
+  err.activeRuntime = runtime;
+  err.targetRuntime = { type: targetType, model: targetName };
+  throw err;
+}
+
+function jsonErrorStatus(err) {
+  return Number(err?.statusCode) || (err?.code === "MODEL_ALREADY_ACTIVE" ? 409 : 500);
+}
 let llmSettings = {
   model: null,
   threads: Math.max(1, Math.min(16, os.cpus().length || 4)),
@@ -2015,10 +2048,6 @@ async function startTts(settings = {}) {
     throw new Error("Kokoro TTS runtime is not installed. Run scripts/setup/setup-tts for this platform.");
   }
   const model = resolveTtsModel(settings.model || ttsSettings.model);
-  await killBackend();
-  await killOpenVinoWorker();
-  await killLlm();
-  await stopSpeech();
   PORT_TTS = PREFERRED_TTS_PORT;
   ttsError = null;
   ttsReady = true;
@@ -2213,9 +2242,6 @@ async function startSpeech(settings = {}) {
     throw new Error(`${backend.label || "Selected"} whisper.cpp backend is not installed. Run setup or copy a compatible binary to ${backend.pathHint || "app/speech-backend"}.`);
   }
   const model = resolveSpeechModel(settings.model);
-  await killBackend();
-  await killOpenVinoWorker();
-  await killLlm();
   PORT_SPEECH = await findAvailableSpeechPort();
   speechError = null;
   speechReady = true;
@@ -3843,6 +3869,7 @@ async function startLlmWithBackend(settings = {}, backend) {
     throw new Error("llama.cpp is not installed. Run the platform setup script to install the text backend.");
   }
 
+  assertNoOtherActiveRuntime("text", filename);
   await killBackend();
   await killOpenVinoWorker();
   await killLlm();
@@ -4066,6 +4093,10 @@ async function startLlmWithBackend(settings = {}, backend) {
 }
 
 async function startBackend(settings = {}) {
+  const requestedSettings = { ...currentSettings, ...settings };
+  if (!requestedSettings.model) requestedSettings.model = getDefaultModel();
+  assertNoOtherActiveRuntime("image", requestedSettings.model);
+
   await killLlm();
   if (settings.backendType === "openvino-npu") {
     await startOpenVinoWorker(settings);
@@ -4073,8 +4104,7 @@ async function startBackend(settings = {}) {
   }
   await killOpenVinoWorker();
   backendError = null;
-  currentSettings = { ...currentSettings, ...settings };
-  if (!currentSettings.model) currentSettings.model = getDefaultModel();
+  currentSettings = requestedSettings;
   if (!currentSettings.model) {
     console.log("  [backend] No model found in app/models/ — backend not started");
     return;
@@ -5458,8 +5488,10 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, ready: llmReady, port: PORT_LLM, settings: llmSettings });
     } catch (err) {
       llmError = err.message || String(err);
-      await runExclusiveLlmOperation(() => killLlm());
-      return json(res, 500, { ok: false, error: llmError });
+      if (err.code !== "MODEL_ALREADY_ACTIVE") {
+        await runExclusiveLlmOperation(() => killLlm());
+      }
+      return json(res, jsonErrorStatus(err), { ok: false, error: llmError, code: err.code || "", activeRuntime: err.activeRuntime || null });
     }
   }
 
@@ -5511,7 +5543,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, ready: speechReady, settings: speechSettings, port: PORT_SPEECH });
     } catch (err) {
       speechError = err.message || String(err);
-      return json(res, 500, { ok: false, error: speechError });
+      return json(res, jsonErrorStatus(err), { ok: false, error: speechError, code: err.code || "", activeRuntime: err.activeRuntime || null });
     }
   }
 
@@ -5653,7 +5685,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, ready: ttsReady, settings: ttsSettings, port: PORT_TTS });
     } catch (err) {
       ttsError = err.message || String(err);
-      return json(res, 500, { ok: false, error: ttsError });
+      return json(res, jsonErrorStatus(err), { ok: false, error: ttsError, code: err.code || "", activeRuntime: err.activeRuntime || null });
     }
   }
 
@@ -5673,7 +5705,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, output });
     } catch (err) {
       ttsError = err.message || String(err);
-      return json(res, 500, { ok: false, error: ttsError });
+      return json(res, jsonErrorStatus(err), { ok: false, error: ttsError, code: err.code || "", activeRuntime: err.activeRuntime || null });
     }
   }
 
@@ -6232,8 +6264,6 @@ async function getLlmfitRecommendations(useCase = "chat", limit = 10) {
     const body = await readJsonBody(req, res);
     if (!body) return;
     console.log("  [api] Restart backend request:", body);
-    await killBackend();
-    await new Promise(r => setTimeout(r, 500));
     const newSettings = {};
     if (body.model)    newSettings.model    = body.backend_type === "openvino-npu" ? String(body.model) : path.join(MODELS, body.model);
     if (body.steps)    newSettings.steps    = parseInt(body.steps);
@@ -6251,6 +6281,10 @@ async function getLlmfitRecommendations(useCase = "chat", limit = 10) {
     if (typeof body.vae_on_cpu === "boolean") newSettings.vaeOnCpu = body.vae_on_cpu;
     if (typeof body.flash_attn === "boolean") newSettings.flashAttn = body.flash_attn;
     try {
+      const targetModel = newSettings.model || currentSettings.model || getDefaultModel();
+      assertNoOtherActiveRuntime("image", targetModel);
+      await killBackend();
+      await new Promise(r => setTimeout(r, 500));
       if (newSettings.backendType === "openvino-npu") {
         startBackend(newSettings).catch((err) => {
           backendError = err.message || String(err);
@@ -6267,7 +6301,7 @@ async function getLlmfitRecommendations(useCase = "chat", limit = 10) {
       return json(res, 200, { ok: true, message: "Backend restarting...", settings: currentSettings, port: PORT_BACKEND });
     } catch (err) {
       backendError = err.message || String(err);
-      return json(res, 500, { ok: false, error: backendError, port: PORT_BACKEND });
+      return json(res, jsonErrorStatus(err), { ok: false, error: backendError, code: err.code || "", activeRuntime: err.activeRuntime || null, port: PORT_BACKEND });
     }
   }
 

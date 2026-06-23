@@ -145,9 +145,9 @@ function TextChat({
 
   useEffect(() => {
     if (setIsLlmLoaded) {
-      setIsLlmLoaded(status.ready);
+      setIsLlmLoaded(status.ready ? (status.settings?.model || true) : false);
     }
-  }, [status.ready, setIsLlmLoaded]);
+  }, [status.ready, status.settings?.model, setIsLlmLoaded]);
 
   const [showModelMenu, setShowModelMenu] = useState(false);
   const modelMenuRef = useRef(null);
