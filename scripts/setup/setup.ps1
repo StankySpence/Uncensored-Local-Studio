@@ -1,8 +1,8 @@
-# Local AI Image Generator - Setup Script
-# scripts/ lives at root, app/ is a sibling folder
+# Uncensored AI Studio - Setup Script
+# scripts/setup/ lives under root, app/ is a root sibling of scripts/
 
 $scriptDir   = Split-Path -Parent $MyInvocation.MyCommand.Path
-$rootDir     = Split-Path -Parent $scriptDir
+$rootDir     = Split-Path -Parent (Split-Path -Parent $scriptDir)
 $appDir      = Join-Path $rootDir "app"
 $frontendDir = Join-Path $appDir  "frontend"
 $toolsDir    = Join-Path $appDir  "tools"
@@ -13,10 +13,9 @@ $distDir     = Join-Path $appDir   "dist"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 function Print-Header {
-    Clear-Host
     Write-Host ""
     Write-Host "  ============================================================" -ForegroundColor Cyan
-    Write-Host "   LOCAL AI IMAGE GENERATOR  -  First-Time Setup" -ForegroundColor Cyan
+    Write-Host "   UNCENSORED AI STUDIO      -  First-Time Setup" -ForegroundColor Cyan
     Write-Host "   100% Self-Contained  |  No System Install Required" -ForegroundColor DarkCyan
     Write-Host "  ============================================================" -ForegroundColor Cyan
     Write-Host ""
@@ -47,6 +46,18 @@ function Format-Speed {
     return "{0:N0} KB/s" -f ($bps / 1KB)
 }
 
+function Enable-Tls12 {
+    try {
+        # Use the protocol's numeric value because older .NET enum definitions
+        # do not expose the Tls12 member even when Windows supports TLS 1.2.
+        $tls12 = [Enum]::ToObject([Net.SecurityProtocolType], 3072)
+        [Net.ServicePointManager]::SecurityProtocol =
+            [Net.ServicePointManager]::SecurityProtocol -bor $tls12
+    } catch {
+        throw "TLS 1.2 could not be enabled. This setup requires 64-bit Windows 10 or Windows 11 with current system updates. $($_.Exception.Message)"
+    }
+}
+
 function Invoke-RichDownload {
     param([string]$Url, [string]$Dest, [string]$Label)
     Print-Info "Downloading: $Label"
@@ -57,7 +68,7 @@ function Invoke-RichDownload {
     $lastTime  = [DateTime]::Now
 
     try {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Enable-Tls12
         $req    = [System.Net.HttpWebRequest]::Create($Url)
         $req.UserAgent = "Mozilla/5.0"
         $resp   = $req.GetResponse()
@@ -147,15 +158,30 @@ function Expand-WithProgress {
 # ══════════════════════════════════════════════════════════════════════════════
 Print-Header
 
-$steps = 4
+$steps = 8
 
 # ── Step 1: Portable Node.js ──────────────────────────────────────────────────
 Print-Step 1 $steps "Setting up portable Node.js (app/tools/node-win/)"
 
+$nodeReady = $false
 if ((Test-Path $nodeExe) -and (Test-Path $npmCmd)) {
-    $v = & $nodeExe --version
-    Print-OK "Portable Node.js already ready: $v"
-} else {
+    try {
+        $v = & $nodeExe --version
+        # Test if npm is functional (doesn't throw parsing/unexpected token errors)
+        $npmTest = & $nodeExe (Join-Path $nodeDir "node_modules\npm\bin\npm-cli.js") --version 2>&1
+        if ($LASTEXITCODE -eq 0 -and $npmTest -match "^\d+\.\d+\.\d+") {
+            $nodeReady = $true
+            Print-OK "Portable Node.js already ready: $v"
+        }
+    } catch {}
+}
+
+if (-not $nodeReady) {
+    if (Test-Path $nodeDir) {
+        Print-Warn "Portable Node.js installation is corrupted or incomplete. Cleaning up..."
+        Remove-Item $nodeDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     $nodeZip = Join-Path $toolsDir "node.zip"
     New-Item -ItemType Directory -Force -Path $toolsDir | Out-Null
 
@@ -175,12 +201,27 @@ if ((Test-Path $nodeExe) -and (Test-Path $npmCmd)) {
         Rename-Item $extracted.FullName "node-win"
     }
 
-    if (-not ((Test-Path $nodeExe) -and (Test-Path $npmCmd))) {
-        Print-Fail "Portable Node.js install is incomplete. Close any running Local AI Image Generator windows, delete app/tools/node-win, then run setup again."
+    # Pause briefly to allow USB drive writes to flush
+    Print-Info "Waiting for disk to flush..."
+    Start-Sleep -Seconds 3
+
+    # Re-verify
+    $nodeReady = $false
+    if ((Test-Path $nodeExe) -and (Test-Path $npmCmd)) {
+        try {
+            $v = & $nodeExe --version
+            $npmTest = & $nodeExe (Join-Path $nodeDir "node_modules\npm\bin\npm-cli.js") --version 2>&1
+            if ($LASTEXITCODE -eq 0 -and $npmTest -match "^\d+\.\d+\.\d+") {
+                $nodeReady = $true
+            }
+        } catch {}
+    }
+
+    if (-not $nodeReady) {
+        Print-Fail "Portable Node.js install is incomplete or corrupted. Close any running Uncensored AI Studio windows, delete app/tools/node-win, then run setup again."
         Read-Host; exit 1
     }
 
-    $v = & $nodeExe --version
     Print-OK "Portable Node.js ready: $v"
 }
 
@@ -199,6 +240,56 @@ if (-not $hasNvidia) {
         & nvidia-smi *> $null
         if ($LASTEXITCODE -eq 0) { $hasNvidia = $true }
     } catch {}
+}
+
+Print-Step 2 $steps "Setting up stable-diffusion.cpp CPU backend (app/backend/win/cpu/)"
+$cpuBackendDest = Join-Path $appDir "backend\win\cpu"
+$cpuBackendExe  = Join-Path $cpuBackendDest "sd-cpu.exe"
+$cpuBackendDll  = Join-Path $cpuBackendDest "stable-diffusion.dll"
+
+if ((Test-Path $cpuBackendExe) -and (Test-Path $cpuBackendDll)) {
+    Print-OK "CPU backend binaries already ready."
+} else {
+    $cpuBackendZip = Join-Path $toolsDir "sd-cpu.zip"
+    New-Item -ItemType Directory -Force -Path $toolsDir | Out-Null
+    New-Item -ItemType Directory -Force -Path $cpuBackendDest | Out-Null
+
+    $ok = Invoke-RichDownload `
+        -Url  "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-669-2d40a8b/sd-master-2d40a8b-bin-win-avx2-x64.zip" `
+        -Dest $cpuBackendZip `
+        -Label "stable-diffusion.cpp CPU Backend (Windows x64 AVX2)"
+
+    if (-not $ok) { Print-Fail "Cannot download CPU backend binaries."; Read-Host; exit 1 }
+
+    $tempExt = Join-Path $toolsDir "sd-cpu-temp"
+    Expand-WithProgress -ZipPath $cpuBackendZip -Destination $tempExt -Label "CPU Backend"
+    Remove-Item $cpuBackendZip -Force
+
+    if (Test-Path $tempExt) {
+        $extractedExe = Join-Path $tempExt "bin\sd-server.exe"
+        if (-not (Test-Path $extractedExe)) { $extractedExe = Join-Path $tempExt "sd-server.exe" }
+        if (-not (Test-Path $extractedExe)) { $extractedExe = Join-Path $tempExt "bin\sd.exe" }
+        if (-not (Test-Path $extractedExe)) { $extractedExe = Join-Path $tempExt "sd.exe" }
+
+        $extractedDll = Join-Path $tempExt "bin\stable-diffusion.dll"
+        if (-not (Test-Path $extractedDll)) { $extractedDll = Join-Path $tempExt "stable-diffusion.dll" }
+
+        if (Test-Path $extractedExe) { Copy-Item $extractedExe $cpuBackendExe -Force }
+        if (Test-Path $extractedDll) { Copy-Item $extractedDll $cpuBackendDll -Force }
+
+        Get-ChildItem $tempExt -Filter "*.dll" -Recurse | ForEach-Object { Copy-Item $_.FullName $cpuBackendDest -Force }
+        Get-ChildItem $tempExt -Filter "*.exe" -Recurse | ForEach-Object {
+            if ($_.FullName -ne $extractedExe) { Copy-Item $_.FullName $cpuBackendDest -Force }
+        }
+        Remove-Item $tempExt -Recurse -Force
+    }
+
+    if ((Test-Path $cpuBackendExe) -and (Test-Path $cpuBackendDll)) {
+        Print-OK "CPU backend binaries installed successfully!"
+    } else {
+        Print-Fail "Failed to copy backend binaries to app/backend/win/cpu/."
+        Read-Host; exit 1
+    }
 }
 
 if ($hasNvidia) {
@@ -379,20 +470,88 @@ if ($hasNvidia) {
 }
 
 # ── Step 3: npm install ───────────────────────────────────────────────────────
-Print-Step 3 $steps "Installing frontend dependencies (app/frontend/)"
+Print-Step 3 $steps "Setting up llama.cpp text backends (Vulkan + CPU)"
+& (Join-Path $scriptDir "setup-llama.ps1")
+if (-not $?) {
+    Print-Fail "llama.cpp setup failed."
+    Read-Host; exit 1
+}
+
+Print-Step 4 $steps "Setting up whisper.cpp speech backend"
+& (Join-Path $scriptDir "setup-whisper.ps1")
+if (-not $?) {
+    Print-Fail "whisper.cpp setup failed."
+    Read-Host; exit 1
+}
+
+Print-Step 5 $steps "Setting up Kokoro ONNX text-to-speech runtime"
+& (Join-Path $scriptDir "setup-tts.ps1")
+if (-not $?) {
+    Print-Fail "Kokoro TTS setup failed."
+    Read-Host; exit 1
+}
+
+$npu = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like "*Intel(R) AI Boost*" -or ($_.Name -match "NPU" -and $_.PNPClass -eq "ComputeAccelerator") } |
+    Select-Object -First 1
+
+Print-Step 6 $steps "Setting up portable OpenVINO NPU runtime"
+if ($npu) {
+    & (Join-Path $scriptDir "setup-openvino-npu.ps1")
+    if (-not $?) {
+        Print-Fail "OpenVINO NPU setup failed."
+        Read-Host; exit 1
+    }
+} else {
+    Print-Info "Intel AI Boost NPU not detected. Skipping OpenVINO NPU runtime."
+}
+
+Print-Step 7 $steps "Installing frontend dependencies (app/frontend/)"
 Write-Host ""
 
 if (-not (Test-Path $npmCmd)) {
     Print-Fail "npm.cmd was not found at $npmCmd"
-    Print-Fail "Close any running Local AI Image Generator windows, delete app/tools/node-win, then run setup again."
+    Print-Fail "Close any running Uncensored AI Studio windows, delete app/tools/node-win, then run setup again."
     Read-Host; exit 1
 }
+
+# If node_modules is a Unix symlink/junction, remove it so Windows can install natively into a real directory
+$nodeModulesDir = Join-Path $frontendDir "node_modules"
+$activeOsFile = Join-Path $frontendDir ".active_modules_os"
+$prevOs = ""
+if (Test-Path $activeOsFile) {
+    $prevOs = (Get-Content $activeOsFile -Raw).Trim()
+}
+
+if (Test-Path $nodeModulesDir) {
+    $item = Get-Item $nodeModulesDir
+    if ($item.Attributes -match "ReparsePoint") {
+        Print-Info "Removing Unix symlink for node_modules on Windows..."
+        Remove-Item $nodeModulesDir -Force -ErrorAction SilentlyContinue
+    } elseif ($prevOs -ne "windows" -and $prevOs -ne "") {
+        # It's a real folder, but it belongs to another OS (e.g. linux or mac)
+        Print-Info "Swapping out node_modules to node_modules_$prevOs..."
+        $targetDir = Join-Path $frontendDir "node_modules_$prevOs"
+        if (Test-Path $targetDir) { Remove-Item $targetDir -Recurse -Force -ErrorAction SilentlyContinue }
+        Move-Item $nodeModulesDir $targetDir -Force
+    }
+}
+
+# Now swap in node_modules_windows if it exists
+$winModulesDir = Join-Path $frontendDir "node_modules_windows"
+if ((Test-Path $winModulesDir) -and -not (Test-Path $nodeModulesDir)) {
+    Print-Info "Swapping in node_modules_windows..."
+    Move-Item $winModulesDir $nodeModulesDir -Force
+}
+
+# Mark windows as active
+"windows" | Out-File -FilePath $activeOsFile -NoNewline -Encoding utf8
 
 Push-Location $frontendDir
 $oldPath = $env:PATH
 try {
     $env:PATH = "$nodeDir;$env:PATH"
-    & $npmCmd install --prefer-offline 2>&1
+    & $npmCmd install --prefer-offline --loglevel=error
     if ($LASTEXITCODE -ne 0) {
         Print-Fail "npm install failed."
         Read-Host; exit 1
@@ -401,10 +560,10 @@ try {
     Print-OK "Dependencies installed!"
 
     # ── Step 4: Build frontend ────────────────────────────────────────────────
-    Print-Step 4 $steps "Building frontend -> app/dist/"
+    Print-Step 8 $steps "Building frontend -> app/dist/"
     Write-Host ""
 
-    & $npmCmd run build 2>&1
+    & $npmCmd run build
     if ($LASTEXITCODE -ne 0) {
         Print-Fail "Frontend build failed."
         Read-Host; exit 1
@@ -419,7 +578,7 @@ try {
 # ── Done ─────────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "  ============================================================" -ForegroundColor Green
-Write-Host "   Setup complete! Just double-click start.bat to launch." -ForegroundColor Green
+Write-Host "   Setup complete! Just double-click windows.bat to launch." -ForegroundColor Green
 Write-Host "  ============================================================" -ForegroundColor Green
 Write-Host ""
 Read-Host "  Press Enter to close..."

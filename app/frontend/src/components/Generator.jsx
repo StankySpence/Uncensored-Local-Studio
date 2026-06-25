@@ -1,6 +1,19 @@
 import React, { memo, useState, useRef, useCallback } from "react";
 import { Sparkles, Download, Copy, RefreshCw, Check, Sliders, Trash2, ImagePlus } from "lucide-react";
-import { generateImage, startServer, stopServer, waitForServerReady, getBackendStatus, getGenerationProgress, saveGeneratedOutput, deleteGeneratedOutputs } from "../services/api";
+import { 
+  generateImage, 
+  startServer, 
+  stopServer, 
+  waitForServerReady, 
+  getBackendStatus, 
+  getGenerationProgress, 
+  saveGeneratedOutput, 
+  deleteGeneratedOutputs,
+  getLlmStatus,
+  listLlmModels,
+  startLlm,
+  chatWithLlm
+} from "../services/api";
 
 const GalleryItem = memo(({ img, idx, isSelected, onClick }) => {
   const handleClick = (e) => {
@@ -39,6 +52,8 @@ function Generator({
   setActiveTab,
   showAlert = async ({ message }) => window.alert(message),
   showConfirm = async ({ message }) => window.confirm(message),
+  specs,
+  textSettings,
 }) {
   const [outputImage, setOutputImage] = useState(null);
   const [outputSeed, setOutputSeed] = useState(null);
@@ -56,9 +71,87 @@ function Generator({
   const [isDecoding, setIsDecoding] = useState(false);
   const [selectedGalleryIndexes, setSelectedGalleryIndexes] = useState([]);
   const [baseImage, setBaseImage] = useState(null);
+  const [isEnhancing, setIsEnhancing] = useState(false);
   const timerRef = useRef(null);
   const abortControllerRef = useRef(null);
   const hasRealGenerationStepRef = useRef(false);
+
+  const handleEnhancePrompt = async () => {
+    if (!prompt.trim() || isEnhancing || isGenerating) return;
+    setIsEnhancing(true);
+    try {
+      const status = await getLlmStatus();
+      let targetModel = status.settings?.model;
+      
+      if (!status.ready) {
+        const models = await listLlmModels();
+        if (models.length === 0) {
+          showAlert({
+            title: "No Text Models",
+            message: "You haven't downloaded any text models yet. Please go to the 'Model Manager' or 'Text Chat' tab to download a GGUF model first.",
+            danger: true
+          });
+          setIsEnhancing(false);
+          return;
+        }
+        
+        const savedLlm = localStorage.getItem("selectedLlmModel") || models[0]?.filename;
+        targetModel = models.some(m => m.filename === savedLlm) ? savedLlm : models[0]?.filename;
+        
+        const confirm = await showConfirm({
+          title: "Load Text Model?",
+          message: `Enhancing your prompt requires loading the local text model "${targetModel}". This will temporarily unload the image model from memory. Do you want to proceed?`,
+          confirmLabel: "Load & Enhance",
+          cancelLabel: "Cancel"
+        });
+        
+        if (!confirm) {
+          setIsEnhancing(false);
+          return;
+        }
+        
+        const cores = textSettings?.threads || specs?.cpu_cores_physical || 4;
+        const context = textSettings?.contextSize || 2048;
+        await startLlm(targetModel, {
+          threads: cores,
+          contextSize: context,
+          gpuLayers: -1,
+          preferredBackend: textSettings?.preferredBackend
+        });
+      }
+      
+      const systemPrompt = "You are a helpful assistant. Rewrite the user's image prompt to be more descriptive and detailed for image generation. Keep it under 80 words. Output ONLY the rewritten prompt, no explanation or introductory text.";
+      const messages = [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `Please expand this prompt: "${prompt}"` }
+      ];
+      
+      const temp = textSettings?.temperature || 0.7;
+      const response = await chatWithLlm(messages, { temperature: temp, maxTokens: 128 });
+      let cleanResponse = response.content.trim();
+      if (cleanResponse.startsWith('"') && cleanResponse.endsWith('"')) {
+        cleanResponse = cleanResponse.slice(1, -1);
+      }
+      cleanResponse = cleanResponse.replace(/^Here is the expanded prompt:?\s*/i, "");
+      cleanResponse = cleanResponse.replace(/^Enhanced prompt:?\s*/i, "");
+      
+      setPrompt(cleanResponse);
+    } catch (err) {
+      showAlert({
+        title: "Prompt Enhancement Failed",
+        message: err.message || String(err),
+        danger: true
+      });
+    } finally {
+      setIsEnhancing(false);
+    }
+  };
+
+  React.useEffect(() => {
+    if (constraints.backendType === "apple-npu" || constraints.backendType === "openvino-npu") {
+      setBaseImage(null);
+    }
+  }, [constraints.backendType]);
 
   const handleBaseImageSelect = (e) => {
     const file = e.target.files?.[0];
@@ -91,14 +184,20 @@ function Generator({
         const settings = status.settings;
         const currentModelName = settings.model ? settings.model.split(/[\\/]/).pop() : null;
         const targetModelName = activeModel ? activeModel.split(/[\\/]/).pop() : null;
+        const requestedBackend = constraints.backendType || (constraints.useGpu === false ? "cpu" : "auto");
+        const currentBackend = settings.backendType || (settings.useGpu === false ? "cpu" : "auto");
+        const shouldCompareModel = requestedBackend !== "openvino-npu";
+        const isCoreMLBackend = requestedBackend === "apple-npu";
 
-        if (currentModelName !== targetModelName ||
-            parseInt(settings.steps) !== parseInt(constraints.steps) ||
-            Math.abs(parseFloat(settings.cfgScale) - parseFloat(constraints.cfgScale)) > 0.05 ||
-            settings.sampler !== constraints.sampler ||
-            parseInt(settings.threads) !== parseInt(constraints.threads) ||
+        if ((shouldCompareModel && currentModelName !== targetModelName) ||
+            (!isCoreMLBackend && parseInt(settings.steps) !== parseInt(constraints.steps)) ||
+            (!isCoreMLBackend && Math.abs(parseFloat(settings.cfgScale) - parseFloat(constraints.cfgScale)) > 0.05) ||
+            (!isCoreMLBackend && settings.sampler !== constraints.sampler) ||
+            (!isCoreMLBackend && parseInt(settings.threads) !== parseInt(constraints.threads)) ||
             Boolean(settings.useGpu) !== (constraints.useGpu !== false) ||
-            (settings.backendType || (settings.useGpu === false ? "cpu" : "auto")) !== (constraints.backendType || (constraints.useGpu === false ? "cpu" : "auto"))) {
+            parseInt(settings.width || 512) !== parseInt(constraints.width || 512) ||
+            parseInt(settings.height || 512) !== parseInt(constraints.height || 512) ||
+            currentBackend !== requestedBackend) {
           needsRestart = true;
         }
       } else {
@@ -112,10 +211,10 @@ function Generator({
       try {
         console.log("Settings out of sync, restarting backend...");
         await startServer(activeModel, constraints);
-        
-        let isReady = false;
+                let isReady = false;
         let crashError = null;
-        for (let i = 0; i < 240; i++) { // Poll for up to 120 seconds (240 * 500ms)
+        const maxStartupPolls = (constraints.backendType === "openvino-npu" || constraints.backendType === "apple-npu") ? 1200 : 240;
+        for (let i = 0; i < maxStartupPolls; i++) {
           const status = await getBackendStatus();
           if (status.loading) {
             setRestartLoadProgress({
@@ -136,7 +235,7 @@ function Generator({
             crashError = status.error;
             break;
           }
-          if (!status.running && i > 3) {
+          if (!status.running && !status.loading?.active && i > 3) {
             crashError = "The backend process terminated immediately on startup.";
             break;
           }
@@ -584,7 +683,7 @@ function Generator({
             <div className="m3-field-group">
               {/* Prompt Textarea */}
               <div className="m3-text-field">
-                <label className="m3-text-field-label">Positive Prompt</label>
+                <label className="m3-text-field-label">Image Prompt</label>
                 <textarea
                   className="m3-textarea"
                   value={prompt}
@@ -594,92 +693,81 @@ function Generator({
                 />
               </div>
 
-              {/* Negative Prompt Text Input */}
-              <div className="m3-text-field">
-                <label className="m3-text-field-label">Negative Prompt (Optional)</label>
-                <input
-                  type="text"
-                  className="m3-input"
-                  value={negativePrompt}
-                  onChange={(e) => setNegativePrompt(e.target.value)}
-                  placeholder="Items to avoid (e.g. 'blurry, low quality, deformed hands, texts')..."
-                  disabled={isGenerating}
-                />
-              </div>
+              {constraints.backendType !== "apple-npu" && constraints.backendType !== "openvino-npu" && (
+                <div className="m3-text-field">
+                  <label className="m3-text-field-label">Base Image (Optional)</label>
+                  {baseImage ? (
+                    <div style={{ display: "flex", gap: "12px", alignItems: "center", padding: "12px", background: "var(--md-sys-color-surface-variant)", borderRadius: "var(--md-shape-corner-medium)", border: "1px solid var(--md-sys-color-outline-variant)" }}>
+                      <img src={baseImage} alt="Base" style={{ width: "64px", height: "64px", objectFit: "cover", borderRadius: "8px", flexShrink: 0 }} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: "0.85rem" }}>Base image ready</div>
+                        <div style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)" }}>
+                          The AI will redraw this image guided by your prompt.
+                        </div>
+                      </div>
+                      <button type="button" className="m3-btn m3-btn-error" style={{ height: "34px", flexShrink: 0 }} onClick={handleClearBaseImage} disabled={isGenerating}>
+                        <Trash2 size={14} />
+                        <span>Remove</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="import-box" style={{ margin: 0, padding: "16px", cursor: isGenerating ? "not-allowed" : "pointer" }}>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        style={{ display: "none" }}
+                        onChange={handleBaseImageSelect}
+                        disabled={isGenerating}
+                      />
+                      <ImagePlus className="import-icon" />
+                      <span style={{ fontWeight: 600 }}>Upload a base image</span>
+                      <span style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", textAlign: "center" }}>
+                        Optional. Generate a new image based on one of your own.
+                      </span>
+                    </label>
+                  )}
 
-              <div className="m3-text-field">
-                <label className="m3-text-field-label">Base Image (Optional)</label>
-                {baseImage ? (
-                  <div style={{ display: "flex", gap: "12px", alignItems: "center", padding: "12px", background: "var(--md-sys-color-surface-variant)", borderRadius: "var(--md-shape-corner-medium)", border: "1px solid var(--md-sys-color-outline-variant)" }}>
-                    <img src={baseImage} alt="Base" style={{ width: "64px", height: "64px", objectFit: "cover", borderRadius: "8px", flexShrink: 0 }} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontWeight: 600, fontSize: "0.85rem" }}>Base image ready</div>
-                      <div style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)" }}>
-                        The AI will redraw this image guided by your prompt.
+                  {baseImage && (
+                    <div style={{ marginTop: "12px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", marginBottom: "4px" }}>
+                        <span>Transformation strength</span>
+                        <span>{constraints.denoisingStrength.toFixed(2)}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.1"
+                        max="1"
+                        step="0.05"
+                        value={constraints.denoisingStrength}
+                        onChange={(e) => setConstraints((prev) => ({ ...prev, denoisingStrength: parseFloat(e.target.value) }))}
+                        disabled={isGenerating}
+                        style={{ width: "100%" }}
+                      />
+                      <div style={{ fontSize: "0.72rem", color: "var(--md-sys-color-outline)", marginTop: "2px" }}>
+                        Lower = closer to your image; higher = more creative freedom. 0.7 is a good start.
                       </div>
                     </div>
-                    <button type="button" className="m3-btn m3-btn-error" style={{ height: "34px", flexShrink: 0 }} onClick={handleClearBaseImage} disabled={isGenerating}>
-                      <Trash2 size={14} />
-                      <span>Remove</span>
-                    </button>
-                  </div>
-                ) : (
-                  <label className="import-box" style={{ margin: 0, padding: "16px", cursor: isGenerating ? "not-allowed" : "pointer" }}>
-                    <input
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp"
-                      style={{ display: "none" }}
-                      onChange={handleBaseImageSelect}
-                      disabled={isGenerating}
-                    />
-                    <ImagePlus className="import-icon" />
-                    <span style={{ fontWeight: 600 }}>Upload a base image</span>
-                    <span style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", textAlign: "center" }}>
-                      Optional. Generate a new image based on one of your own.
-                    </span>
-                  </label>
-                )}
-
-                {baseImage && (
-                  <div style={{ marginTop: "12px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", marginBottom: "4px" }}>
-                      <span>Transformation strength</span>
-                      <span>{constraints.denoisingStrength.toFixed(2)}</span>
-                    </div>
-                    <input
-                      type="range"
-                      min="0.1"
-                      max="1"
-                      step="0.05"
-                      value={constraints.denoisingStrength}
-                      onChange={(e) => setConstraints((prev) => ({ ...prev, denoisingStrength: parseFloat(e.target.value) }))}
-                      disabled={isGenerating}
-                      style={{ width: "100%" }}
-                    />
-                    <div style={{ fontSize: "0.72rem", color: "var(--md-sys-color-outline)", marginTop: "2px" }}>
-                      Lower = closer to your image; higher = more creative freedom. 0.7 is a good start.
-                    </div>
-                  </div>
-                )}
-              </div>
+                  )}
+                </div>
+              )}
 
               {/* Configuration Status Chips (Material 3 style) */}
               <div className="m3-text-field">
                 <label className="m3-text-field-label">Active Image Constraints</label>
                 <div className="chips-container">
-                  <div className="status-chip" onClick={() => setActiveTab("constraints")}>
+                  <div className="status-chip">
                     <Sliders size={14} />
                     <span>Resolution: {constraints.width}x{constraints.height}</span>
                   </div>
-                  <div className="status-chip" onClick={() => setActiveTab("constraints")}>
+                  <div className="status-chip">
                     <RefreshCw size={14} />
                     <span>Steps: {constraints.steps}</span>
                   </div>
-                  <div className="status-chip" onClick={() => setActiveTab("constraints")}>
+                  <div className="status-chip">
                     <Sparkles size={14} />
                     <span>Sampler: {constraints.sampler}</span>
                   </div>
-                  <div className="status-chip" onClick={() => setActiveTab("constraints")}>
+                  <div className="status-chip">
                     <span>Seed: {constraints.seed === -1 ? "Random" : constraints.seed}</span>
                   </div>
                 </div>
