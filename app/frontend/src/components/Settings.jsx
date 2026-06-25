@@ -257,6 +257,49 @@ function Settings({
     error: null,
   });
 
+  const [pendingTextSettings, setPendingTextSettings] = useState(textSettings || {});
+
+  useEffect(() => {
+    if (textSettings) {
+      setPendingTextSettings(textSettings);
+    }
+  }, [textSettings]);
+
+  const EDITABLE_TEXT_KEYS = [
+    "systemPrompt", "contextSize", "temperature", "responseTokenMode", 
+    "maxTokens", "seed", "performanceProfile", "threads", 
+    "gpuLayers", "batchSize", "cacheTypeK", "cacheTypeV", "preferredBackend"
+  ];
+
+  const hasPendingChanges = textSettings && pendingTextSettings && EDITABLE_TEXT_KEYS.some(key => {
+    return pendingTextSettings[key] !== textSettings[key];
+  });
+
+  const handleSaveTextSettings = async () => {
+    try {
+      setTextSettings(pendingTextSettings);
+      if (llmStatus.ready) {
+        await stopLlm();
+        setLlmStatus((prev) => ({ ...prev, ready: false, running: false }));
+        showAlert({
+          title: "Settings Saved & Applied",
+          message: "Text settings saved successfully. The running text model has been unloaded to apply these changes."
+        });
+      } else {
+        showAlert({
+          title: "Settings Saved",
+          message: "Text settings saved successfully."
+        });
+      }
+    } catch (err) {
+      showAlert({
+        title: "Save Failed",
+        message: err.message || String(err),
+        danger: true
+      });
+    }
+  };
+
   const [expandedSections, setExpandedSections] = useState(() => {
     return {
       appearance: localStorage.getItem("settings_section_appearance") === "true",
@@ -380,7 +423,7 @@ function Settings({
   };
 
   const updateTextSetting = (key, value) => {
-    setTextSettings((prev) => ({
+    setPendingTextSettings((prev) => ({
       ...prev,
       [key]: value
     }));
@@ -415,6 +458,7 @@ function Settings({
     batchSize: settings?.batchSize,
     ubatchSize: settings?.ubatchSize,
     performanceProfile: settings?.performanceProfile,
+    preferredBackend: settings?.preferredBackend,
   });
 
   const handleBenchmarkTextBackend = async () => {
@@ -426,8 +470,8 @@ function Settings({
     setBenchmarkBusy(true);
     try {
       const result = await benchmarkLlm(model, {
-        contextSize: Math.min(2048, Number(textSettings?.contextSize) || 2048),
-        gpuLayers: textSettings?.gpuLayers ?? -1,
+        contextSize: Math.min(2048, Number(pendingTextSettings?.contextSize) || 2048),
+        gpuLayers: pendingTextSettings?.gpuLayers ?? -1,
         includeCpu: true,
       });
       const winner = result.winner;
@@ -449,13 +493,14 @@ function Settings({
   };
 
   const handleThinkingToggle = async (enabled) => {
-    const nextSettings = { ...textSettings, enableThinking: enabled };
+    const nextSettings = { ...pendingTextSettings, enableThinking: enabled };
 
     let status = null;
     try {
       status = await getLlmStatus();
     } catch (_) {}
     if (!status?.ready || !status?.settings?.model) {
+      setPendingTextSettings(nextSettings);
       setTextSettings(nextSettings);
       return;
     }
@@ -469,6 +514,7 @@ function Settings({
     if (!reload) return;
 
     try {
+      setPendingTextSettings(nextSettings);
       setTextSettings(nextSettings);
       await stopLlm();
       await startLlm(status.settings.model, buildTextStartOptions(nextSettings));
@@ -899,7 +945,7 @@ function Settings({
                 <label className="m3-text-field-label">System Prompt</label>
                 <textarea
                    className="m3-input"
-                   value={textSettings.systemPrompt || ""}
+                   value={pendingTextSettings.systemPrompt || ""}
                    onChange={(e) => updateTextSetting("systemPrompt", e.target.value)}
                    placeholder="Enter system prompt..."
                    rows={3}
@@ -913,17 +959,17 @@ function Settings({
               <div className="m3-slider-group">
                 <div className="m3-slider-header">
                   <span className="m3-slider-label">Context Size</span>
-                  <span className="settings-value-badge">{textSettings.contextSize || 0}</span>
+                  <span className="settings-value-badge">{pendingTextSettings.contextSize || 0}</span>
                 </div>
                 <input
                   type="range"
                   className="m3-slider"
-                  value={textSettings.contextSize || 0}
+                  value={pendingTextSettings.contextSize || 0}
                   onChange={(e) => updateTextSetting("contextSize", parseInt(e.target.value))}
                   min="0"
                   max="32768"
                   step="512"
-                  style={getSliderStyle(textSettings.contextSize || 0, 0, 32768)}
+                  style={getSliderStyle(pendingTextSettings.contextSize || 0, 0, 32768)}
                 />
                 <span className="settings-option-desc">
                   Model memory limit. 0 uses default limit. (Recommended: 0)
@@ -942,17 +988,17 @@ function Settings({
               <div className="m3-slider-group">
                 <div className="m3-slider-header">
                   <span className="m3-slider-label">Temperature</span>
-                  <span className="settings-value-badge">{textSettings.temperature}</span>
+                  <span className="settings-value-badge">{pendingTextSettings.temperature}</span>
                 </div>
                 <input
                   type="range"
                   className="m3-slider"
-                  value={textSettings.temperature}
+                  value={pendingTextSettings.temperature}
                   onChange={(e) => updateTextSetting("temperature", parseFloat(e.target.value))}
                   min="0"
                   max="2"
                   step="0.1"
-                  style={getSliderStyle(textSettings.temperature, 0, 2)}
+                  style={getSliderStyle(pendingTextSettings.temperature, 0, 2)}
                 />
                 <span className="settings-option-desc">
                   Controls creativity. Lower = focused & factual, Higher = creative & diverse. (Recommended: 0.7)
@@ -964,7 +1010,7 @@ function Settings({
                 <div className="m3-slider-header">
                   <span className="m3-slider-label">Max Response Tokens</span>
                   <span className="settings-value-badge">
-                    {(textSettings.responseTokenMode || "auto") === "auto" ? "Auto" : (textSettings.maxTokens || 1024)}
+                    {(pendingTextSettings.responseTokenMode || "auto") === "auto" ? "Auto" : (pendingTextSettings.maxTokens || 1024)}
                   </span>
                 </div>
                 <div className="m3-segmented-button" style={{ marginBottom: "10px" }}>
@@ -974,24 +1020,24 @@ function Settings({
                   ].map((mode) => (
                     <button
                       key={mode.id}
-                      className={`m3-segment-item ${(textSettings.responseTokenMode || "auto") === mode.id ? "active" : ""}`}
+                      className={`m3-segment-item ${(pendingTextSettings.responseTokenMode || "auto") === mode.id ? "active" : ""}`}
                       onClick={() => updateTextSetting("responseTokenMode", mode.id)}
                     >
                       {mode.label}
                     </button>
                   ))}
                 </div>
-                {(textSettings.responseTokenMode || "auto") === "manual" ? (
+                {(pendingTextSettings.responseTokenMode || "auto") === "manual" ? (
                   <>
                     <input
                       type="range"
                       className="m3-slider"
-                      value={textSettings.maxTokens || 1024}
+                      value={pendingTextSettings.maxTokens || 1024}
                       onChange={(e) => updateTextSetting("maxTokens", parseInt(e.target.value))}
                       min="64"
                       max="4096"
                       step="64"
-                      style={getSliderStyle(textSettings.maxTokens || 1024, 64, 4096)}
+                      style={getSliderStyle(pendingTextSettings.maxTokens || 1024, 64, 4096)}
                     />
                     <span className="settings-option-desc">
                       Manual uses the slider value.
@@ -1009,7 +1055,7 @@ function Settings({
                 <input
                   type="number"
                   className="m3-input"
-                  value={textSettings.seed}
+                  value={pendingTextSettings.seed}
                   onChange={(e) => updateTextSetting("seed", parseInt(e.target.value) || -1)}
                   placeholder="-1"
                 />
@@ -1038,7 +1084,7 @@ function Settings({
                   {["potato", "balanced", "high", "custom"].map((profile) => (
                     <button
                       key={profile}
-                      className={`m3-segment-item ${(textSettings.performanceProfile || "balanced") === profile ? "active" : ""}`}
+                      className={`m3-segment-item ${(pendingTextSettings.performanceProfile || "balanced") === profile ? "active" : ""}`}
                       onClick={() => updateTextSetting("performanceProfile", profile)}
                     >
                       {profile.charAt(0).toUpperCase() + profile.slice(1)}
@@ -1047,38 +1093,57 @@ function Settings({
                 </div>
               </div>
 
+              {llmBackends.available?.length > 1 && (
+                <div className="m3-slider-group">
+                  <div className="m3-slider-header">
+                    <span className="m3-slider-label">Text Backend</span>
+                  </div>
+                  <div className="m3-segmented-button">
+                    {llmBackends.available.map((backend) => (
+                      <button
+                        key={backend.key}
+                        className={`m3-segment-item ${(pendingTextSettings.preferredBackend || "auto") === backend.key ? "active" : ""}`}
+                        onClick={() => updateTextSetting("preferredBackend", backend.key)}
+                      >
+                        {backend.key === "cpu" ? "CPU Only" : backend.key.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="m3-slider-group">
                 <div className="m3-slider-header">
                   <span className="m3-slider-label">CPU Threads</span>
-                  <span className="settings-value-badge">{textSettings.threads || 4}</span>
+                  <span className="settings-value-badge">{pendingTextSettings.threads || 4}</span>
                 </div>
                 <input
                   type="range"
                   className="m3-slider"
-                  value={textSettings.threads || 4}
+                  value={pendingTextSettings.threads || 4}
                   onChange={(e) => updateTextSetting("threads", parseInt(e.target.value))}
                   min="1"
                   max={specs?.cpu_cores_logical || 16}
-                  style={getSliderStyle(textSettings.threads || 4, 1, specs?.cpu_cores_logical || 16)}
+                  style={getSliderStyle(pendingTextSettings.threads || 4, 1, specs?.cpu_cores_logical || 16)}
                 />
               </div>
 
               <div className="m3-slider-group">
                 <div className="m3-slider-header">
                   <span className="m3-slider-label">GPU Layers</span>
-                  <span className="settings-value-badge">{textSettings.gpuLayers === -1 ? "All" : textSettings.gpuLayers}</span>
+                  <span className="settings-value-badge">{pendingTextSettings.gpuLayers === -1 ? "All" : pendingTextSettings.gpuLayers}</span>
                 </div>
                 <input
                   type="range"
                   className="m3-slider"
-                  value={textSettings.gpuLayers === -1 ? 50 : textSettings.gpuLayers}
+                  value={pendingTextSettings.gpuLayers === -1 ? 50 : pendingTextSettings.gpuLayers}
                   onChange={(e) => {
                     const val = parseInt(e.target.value);
                     updateTextSetting("gpuLayers", val >= 50 ? -1 : val);
                   }}
                   min="0"
                   max="50"
-                  style={getSliderStyle(textSettings.gpuLayers === -1 ? 50 : textSettings.gpuLayers, 0, 50)}
+                  style={getSliderStyle(pendingTextSettings.gpuLayers === -1 ? 50 : pendingTextSettings.gpuLayers, 0, 50)}
                 />
                 <span className="settings-option-desc">
                   50 = All layers on GPU
@@ -1088,17 +1153,17 @@ function Settings({
               <div className="m3-slider-group">
                 <div className="m3-slider-header">
                   <span className="m3-slider-label">Batch Size</span>
-                  <span className="settings-value-badge">{textSettings.batchSize || 512}</span>
+                  <span className="settings-value-badge">{pendingTextSettings.batchSize || 512}</span>
                 </div>
                 <input
                   type="range"
                   className="m3-slider"
-                  value={textSettings.batchSize || 512}
+                  value={pendingTextSettings.batchSize || 512}
                   onChange={(e) => updateTextSetting("batchSize", parseInt(e.target.value))}
                   min="64"
                   max="2048"
                   step="64"
-                  style={getSliderStyle(textSettings.batchSize || 512, 64, 2048)}
+                  style={getSliderStyle(pendingTextSettings.batchSize || 512, 64, 2048)}
                 />
               </div>
 
@@ -1110,7 +1175,7 @@ function Settings({
                   {["q4_0", "q8_0", "f16"].map((type) => (
                     <button
                       key={type}
-                      className={`m3-segment-item ${(textSettings.cacheTypeK || "q8_0") === type ? "active" : ""}`}
+                      className={`m3-segment-item ${(pendingTextSettings.cacheTypeK || "q8_0") === type ? "active" : ""}`}
                       onClick={() => {
                         updateTextSetting("cacheTypeK", type);
                         updateTextSetting("cacheTypeV", type);
@@ -1127,6 +1192,51 @@ function Settings({
 
         </div>
           </div>
+
+          {hasPendingChanges && (
+            <div className="settings-save-bar" style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "16px 20px",
+              background: "color-mix(in srgb, var(--md-sys-color-primary) 10%, var(--bg-card))",
+              border: "1px solid color-mix(in srgb, var(--md-sys-color-primary) 30%, transparent)",
+              borderRadius: "14px",
+              marginTop: "20px",
+              gap: "16px",
+              flexWrap: "wrap",
+              animation: "fadeIn 0.2s ease",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <Brain size={18} style={{ color: "var(--md-sys-color-primary)" }} />
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: "0.9rem" }}>Unsaved Text Generation Settings</div>
+                  <div style={{ fontSize: "0.85rem", opacity: 0.8, marginTop: "2px" }}>
+                    {llmStatus.ready
+                      ? "Saving will unload the active text model to apply changes."
+                      : "Changes will be applied on the next model load."}
+                  </div>
+                </div>
+              </div>
+              <button
+                className="m3-btn m3-btn-filled"
+                onClick={handleSaveTextSettings}
+                style={{
+                  background: "var(--md-sys-color-primary)",
+                  color: "var(--md-sys-color-on-primary)",
+                  border: "none",
+                  borderRadius: "10px",
+                  padding: "10px 18px",
+                  fontWeight: 600,
+                  fontSize: "0.85rem",
+                  cursor: "pointer",
+                  boxShadow: "0 2px 8px color-mix(in srgb, var(--md-sys-color-primary) 30%, transparent)",
+                }}
+              >
+                Save & Apply Changes
+              </button>
+            </div>
+          )}
         </div>
       )}
     </>

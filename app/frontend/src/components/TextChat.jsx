@@ -313,39 +313,6 @@ function TextChat({
     loadingModelRef.current = loadingModel;
   }, [loadingModel]);
 
-  // Watch for textSettings changes and reload model if backend mode changed
-  const prevGpuLayersRef = useRef(textSettings?.gpuLayers);
-  const prevThreadsRef = useRef(textSettings?.threads);
-  const prevContextSizeRef = useRef(textSettings?.contextSize);
-  
-  useEffect(() => {
-    const currentGpuLayers = textSettings?.gpuLayers;
-    const currentThreads = textSettings?.threads;
-    const currentContextSize = textSettings?.contextSize;
-    
-    // Only reload if model is already loaded and relevant settings changed
-    if (status.ready && selectedModel && !loadingModel && !isBusy) {
-      const gpuLayersChanged = currentGpuLayers !== prevGpuLayersRef.current;
-      const threadsChanged = currentThreads !== prevThreadsRef.current;
-      const contextSizeChanged = currentContextSize !== prevContextSizeRef.current;
-      
-      if (gpuLayersChanged || threadsChanged || contextSizeChanged) {
-        console.log("[TextChat] Settings changed, reloading model...", {
-          gpuLayers: { from: prevGpuLayersRef.current, to: currentGpuLayers },
-          threads: { from: prevThreadsRef.current, to: currentThreads },
-          contextSize: { from: prevContextSizeRef.current, to: currentContextSize }
-        });
-        
-        // Reload the model with new settings
-        handleModelChange(selectedModel);
-      }
-    }
-    
-    // Update refs
-    prevGpuLayersRef.current = currentGpuLayers;
-    prevThreadsRef.current = currentThreads;
-    prevContextSizeRef.current = currentContextSize;
-  }, [textSettings?.gpuLayers, textSettings?.threads, textSettings?.contextSize]);
 
   const buildTextStartOptions = (settings) => ({
     threads: settings?.threads || specs?.cpu_cores_physical || 4,
@@ -362,6 +329,7 @@ function TextChat({
     batchSize: settings?.batchSize,
     ubatchSize: settings?.ubatchSize,
     performanceProfile: settings?.performanceProfile,
+    preferredBackend: settings?.preferredBackend,
   });
 
   const handleThinkingToggle = async () => {
@@ -537,6 +505,7 @@ function TextChat({
         batchSize: textSettings?.batchSize,
         ubatchSize: textSettings?.ubatchSize,
         performanceProfile: textSettings?.performanceProfile,
+        preferredBackend: textSettings?.preferredBackend,
       });
       setStatus({ ...status, ...result, ready: true, running: true, settings: result.settings });
       setMessages([]);

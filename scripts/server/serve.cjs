@@ -1843,13 +1843,15 @@ function getLlmBackendProbe(force = false) {
     ? { system: -1, cuda: 0, hip: 1, vulkan: 2, sycl: 3, metal: 4, cpu: 9 }
     : osPlatform === "darwin"
       ? { system: -1, metal: 0, cpu: 9 }
-      : { system: -1, cuda: 0, rocm: 1, sycl: 2, vulkan: 3, cpu: 9 };
+      : { system: -1, cuda: 0, rocm: 1, sycl: 2, cpu: 3, vulkan: 4 };
 
   const available = probed
     .filter((item) => item.installed && item.detected)
     .sort((a, b) => {
-      if (a.key === "cpu" && b.key !== "cpu") return 1;
-      if (b.key === "cpu" && a.key !== "cpu") return -1;
+      if (osPlatform !== "linux") {
+        if (a.key === "cpu" && b.key !== "cpu") return 1;
+        if (b.key === "cpu" && a.key !== "cpu") return -1;
+      }
       return (priority[a.key] ?? 8) - (priority[b.key] ?? 8);
     });
 

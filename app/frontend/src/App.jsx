@@ -155,6 +155,7 @@ function App() {
       defragThold: 0.1,
       batchSize: 512,
       ubatchSize: 512,
+      preferredBackend: "auto",
     };
   });
 

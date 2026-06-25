@@ -878,7 +878,8 @@ function ModelManager({
       await startLlm(modelId, {
         threads: cores,
         contextSize: context,
-        gpuLayers: -1
+        gpuLayers: -1,
+        preferredBackend: textSettings?.preferredBackend
       });
       setActiveLlmModel(modelId);
       setLlmRunning(true);
