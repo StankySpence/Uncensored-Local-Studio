@@ -576,6 +576,17 @@ function detectLinuxGpuFromSysfs() {
   return null;
 }
 
+function isVirtualOrSoftwareGpu(name) {
+  const lowercase = String(name || "").toLowerCase();
+  return lowercase.includes("virtual desktop") ||
+         lowercase.includes("remote display") ||
+         lowercase.includes("microsoft basic render") ||
+         lowercase.includes("citrix") ||
+         lowercase.includes("software rasterizer") ||
+         lowercase.includes("virtualbox") ||
+         lowercase.includes("vmware");
+}
+
 let cachedLlamaCudaGpu = null;
 let cachedLlamaCudaGpuChecked = false;
 function detectLlamaCudaGpu() {
@@ -607,7 +618,11 @@ function detectLlamaCudaGpu() {
         free_vram_gb: match[3] ? Math.round((Number(match[3]) / 1024) * 100) / 100 : null,
       });
     }
-    cachedLlamaCudaGpu = devices.sort((a, b) => b.vram_gb - a.vram_gb)[0] || null;
+    let activeDevices = devices.filter(d => !isVirtualOrSoftwareGpu(d.name));
+    if (activeDevices.length === 0) {
+      activeDevices = devices;
+    }
+    cachedLlamaCudaGpu = activeDevices.sort((a, b) => b.vram_gb - a.vram_gb)[0] || null;
   } catch (_) {
     cachedLlamaCudaGpu = null;
   }
@@ -645,7 +660,11 @@ function detectLlamaVulkanGpu() {
         free_vram_gb: match[3] ? Math.round((Number(match[3]) / 1024) * 100) / 100 : null,
       });
     }
-    cachedLlamaVulkanGpu = devices.sort((a, b) => b.vram_gb - a.vram_gb)[0] || null;
+    let activeDevices = devices.filter(d => !isVirtualOrSoftwareGpu(d.name));
+    if (activeDevices.length === 0) {
+      activeDevices = devices;
+    }
+    cachedLlamaVulkanGpu = activeDevices.sort((a, b) => b.vram_gb - a.vram_gb)[0] || null;
   } catch (_) {
     cachedLlamaVulkanGpu = null;
   }
@@ -724,12 +743,16 @@ function getGpuInfo() {
 
         if (gpus.length > 0) {
           const discreteKeywords = ["nvidia", "amd", "arc", "geforce", "radeon", "rtx", "gtx"];
-          let selectedGpu = gpus.find(gpu => {
+          let activeGpus = gpus.filter(gpu => !isVirtualOrSoftwareGpu(gpu.Name));
+          if (activeGpus.length === 0) {
+            activeGpus = gpus;
+          }
+          let selectedGpu = activeGpus.find(gpu => {
             const name = String(gpu.Name || "").toLowerCase();
             return discreteKeywords.some(kw => name.includes(kw));
           });
           if (!selectedGpu) {
-            selectedGpu = gpus[0];
+            selectedGpu = activeGpus[0];
           }
           cachedGpuInfo = {
             name: selectedGpu.Name || "Unknown GPU",
