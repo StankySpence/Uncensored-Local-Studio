@@ -255,7 +255,7 @@ if ((Test-Path $cpuBackendExe) -and (Test-Path $cpuBackendDll)) {
     New-Item -ItemType Directory -Force -Path $cpuBackendDest | Out-Null
 
     $ok = Invoke-RichDownload `
-        -Url  "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-669-2d40a8b/sd-master-2d40a8b-bin-win-avx2-x64.zip" `
+        -Url  "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-721-8caa3f9/sd-master-8caa3f9-bin-win-avx2-x64.zip" `
         -Dest $cpuBackendZip `
         -Label "stable-diffusion.cpp CPU Backend (Windows x64 AVX2)"
 
@@ -306,7 +306,7 @@ if ($hasNvidia) {
         New-Item -ItemType Directory -Force -Path $backendDest | Out-Null
 
         $ok = Invoke-RichDownload `
-            -Url  "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-669-2d40a8b/sd-master-2d40a8b-bin-win-cuda12-x64.zip" `
+            -Url  "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-721-8caa3f9/sd-master-8caa3f9-bin-win-cuda12-x64.zip" `
             -Dest $backendZip `
             -Label "stable-diffusion.cpp CUDA Backend (Windows x64)"
 
