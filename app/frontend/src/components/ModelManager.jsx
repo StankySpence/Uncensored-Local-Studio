@@ -1308,6 +1308,12 @@ function ModelManager({
     }
   };
 
+  const handleCancelImport = () => {
+    if (importAbortController) {
+      importAbortController.abort();
+    }
+  };
+
   const handleImportFile = (e) => {
     const file = e.target.files[0];
     if (file) {

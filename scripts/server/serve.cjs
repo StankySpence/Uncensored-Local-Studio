@@ -6736,6 +6736,8 @@ async function getLlmfitRecommendations(useCase = "chat", limit = 10) {
   });
 });
 
+server.timeout = 0; // Disable socket timeout for large model uploads/downloads
+
 server.listen(PORT_FRONTEND, "0.0.0.0", () => {
   console.log("");
   console.log("  ============================================================");

@@ -917,7 +917,6 @@ function TextChat({
                 </div>
               )}
             </div>
-            {isBusy && !loadingModel && <LoaderCircle className="progress-spinner" size={16} />}
             {selectedModel && (!status.ready || status.settings?.model !== selectedModel) && !loadingModel && (
               <button
                 className="m3-btn m3-btn-filled"
