@@ -7,7 +7,7 @@ import Settings from "./components/Settings";
 import TextChat from "./components/TextChat";
 import SpeechTranscriber from "./components/SpeechTranscriber";
 import TextToSpeech from "./components/TextToSpeech";
-import { cleanupCandidates, formatBytes, getCleanupCandidates, getDiagnostics, getHardwareSpecs, getHealth, getTelemetry, getBackendOptions, getBackendStatus, listGeneratedOutputs, listSpeechTranscriptions, deleteSpeechTranscription, listTtsOutputs, deleteTtsOutput, stopServer } from "./services/api";
+import { cleanupCandidates, formatBytes, getCleanupCandidates, getDiagnostics, getHardwareSpecs, getHealth, getTelemetry, getBackendOptions, getBackendStatus, listGeneratedOutputs, listLlmConversations, saveLlmConversation, deleteLlmConversation, listSpeechTranscriptions, deleteSpeechTranscription, listTtsOutputs, deleteTtsOutput, stopServer } from "./services/api";
 import "./App.css";
 
 function App() {
@@ -240,17 +240,6 @@ function App() {
   const [selectedTtsOutput, setSelectedTtsOutput] = useState(null);
   const [showTtsHistory, setShowTtsHistory] = useState(false);
 
-  useEffect(() => {
-    const saved = localStorage.getItem("chat_conversations");
-    if (saved) {
-      try {
-        setConversations(JSON.parse(saved));
-      } catch (_) {
-        localStorage.removeItem("chat_conversations");
-      }
-    }
-  }, []);
-
   const sanitizeMessageForStorage = (message) => {
     if (!Array.isArray(message?.content)) return message;
     return {
@@ -272,37 +261,83 @@ function App() {
       : [],
   });
 
-  const persistConversations = (list) => {
-    const compactList = list.map(sanitizeConversationForStorage);
+  const persistConversation = (conversation) => {
+    const compactConversation = sanitizeConversationForStorage(conversation);
     try {
-      localStorage.setItem("chat_conversations", JSON.stringify(compactList));
+      saveLlmConversation(compactConversation).catch((err) => {
+        console.warn("Could not save chat history to app folder:", err);
+      });
     } catch (err) {
       console.warn("Could not save chat history:", err);
     }
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    async function loadConversations() {
+      let legacyConversations = [];
+      const legacySaved = localStorage.getItem("chat_conversations");
+      if (legacySaved) {
+        try {
+          legacyConversations = JSON.parse(legacySaved);
+        } catch (_) {
+          localStorage.removeItem("chat_conversations");
+        }
+      }
+
+      try {
+        const diskConversations = await listLlmConversations();
+        const diskIds = new Set(diskConversations.map((conversation) => conversation.id));
+        const missingLegacy = legacyConversations
+          .map(sanitizeConversationForStorage)
+          .filter((conversation) => conversation.id && !diskIds.has(conversation.id));
+
+        if (missingLegacy.length > 0) {
+          await Promise.all(missingLegacy.map((conversation) => saveLlmConversation(conversation)));
+        }
+
+        const merged = [...diskConversations, ...missingLegacy]
+          .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
+        if (!cancelled) setConversations(merged);
+        if (legacySaved) localStorage.removeItem("chat_conversations");
+      } catch (err) {
+        console.warn("Could not load chat history from app folder:", err);
+        if (!cancelled && legacyConversations.length > 0) {
+          setConversations(legacyConversations.map(sanitizeConversationForStorage));
+        }
+      }
+    }
+    loadConversations();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const saveConversationState = useCallback((id, msgs, modelName, newTitle = null) => {
     setConversations((prev) => {
       const list = [...prev];
       const idx = list.findIndex(c => c.id === id);
+      let conversation;
       if (idx !== -1) {
-        list[idx] = {
+        conversation = {
           ...list[idx],
           messages: msgs,
           timestamp: Date.now(),
           model: modelName,
           ...(newTitle ? { title: newTitle } : {})
         };
+        list[idx] = conversation;
       } else {
-        list.unshift({
+        conversation = {
           id,
           title: newTitle || "Chat Session",
           model: modelName,
           messages: msgs,
           timestamp: Date.now()
-        });
+        };
+        list.unshift(conversation);
       }
-      persistConversations(list);
+      persistConversation(conversation);
       return list;
     });
   }, []);
@@ -311,8 +346,10 @@ function App() {
     if (e) e.stopPropagation();
     setConversations((prev) => {
       const filtered = prev.filter((c) => c.id !== id);
-      persistConversations(filtered);
       return filtered;
+    });
+    deleteLlmConversation(id).catch((err) => {
+      console.warn("Could not delete chat history from app folder:", err);
     });
     if (activeConversationId === id) {
       setActiveConversationId(null);

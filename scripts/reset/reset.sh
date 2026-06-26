@@ -72,6 +72,16 @@ if [[ -d "$APP_DIR/tts-models" ]]; then
   echo "   >> Preserving TTS models in app/tts-models."
 fi
 
+# Preserve generated image outputs
+if [[ -d "$APP_DIR/outputs" ]]; then
+  echo "   >> Preserving generated image outputs in app/outputs."
+fi
+
+# Preserve chat history
+if [[ -d "$APP_DIR/chat-history" ]]; then
+  echo "   >> Preserving chat history in app/chat-history."
+fi
+
 # Preserve transcriptions
 if [[ -d "$APP_DIR/transcriptions" ]]; then
   echo "   >> Preserving speech transcripts in app/transcriptions."
@@ -111,7 +121,7 @@ fi
 
 echo ""
 echo "  ============================================================"
-echo "   Reset complete. Image models, text models, speech models, TTS models, transcripts, TTS outputs, OpenVINO models, and generated outputs were preserved."
+echo "   Reset complete. Models, generated images, chat history, transcripts, TTS outputs, TTS cache, and OpenVINO models were preserved."
 echo "  ============================================================"
 echo ""
 read -rp "  Press Enter to close..."

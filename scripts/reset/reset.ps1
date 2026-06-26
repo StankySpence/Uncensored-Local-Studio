@@ -78,6 +78,18 @@ if (Test-Path $ttsModelsDir) {
     Write-Host "   >> Preserving TTS models in app/tts-models." -ForegroundColor Cyan
 }
 
+# Preserve generated image outputs
+$outputsDir = Join-Path $appDir "outputs"
+if (Test-Path $outputsDir) {
+    Write-Host "   >> Preserving generated image outputs in app/outputs." -ForegroundColor Cyan
+}
+
+# Preserve chat history
+$chatHistoryDir = Join-Path $appDir "chat-history"
+if (Test-Path $chatHistoryDir) {
+    Write-Host "   >> Preserving chat history in app/chat-history." -ForegroundColor Cyan
+}
+
 # Preserve transcriptions
 $transcriptionsDir = Join-Path $appDir "transcriptions"
 if (Test-Path $transcriptionsDir) {
@@ -125,7 +137,7 @@ if (Test-Path $lockFile) {
 
 Write-Host ""
 Write-Host "  ============================================================" -ForegroundColor Green
-Write-Host "   Reset complete. Image models, text models, speech models, TTS models, transcripts, TTS outputs, OpenVINO models, and generated outputs were preserved." -ForegroundColor Green
+Write-Host "   Reset complete. Models, generated images, chat history, transcripts, TTS outputs, TTS cache, and OpenVINO models were preserved." -ForegroundColor Green
 Write-Host "  ============================================================" -ForegroundColor Green
 Write-Host ""
 Read-Host "  Press Enter to close..."

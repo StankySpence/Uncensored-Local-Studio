@@ -94,6 +94,10 @@ const LLM_MODELS = path.join(ROOT, "app", "llm-models");
 if (!fs.existsSync(LLM_MODELS)) {
   fs.mkdirSync(LLM_MODELS, { recursive: true });
 }
+const CHAT_HISTORY = path.join(ROOT, "app", "chat-history");
+if (!fs.existsSync(CHAT_HISTORY)) {
+  fs.mkdirSync(CHAT_HISTORY, { recursive: true });
+}
 const LLM_BACKEND_PATHS = {
   winCuda: path.join(ROOT, "app", "llm-backend", "win", "cuda", "llama-server.exe"),
   winVulkan: path.join(ROOT, "app", "llm-backend", "win", "vulkan", "llama-server.exe"),
@@ -2706,6 +2710,9 @@ function getSetupPaths() {
       cpuBackend: BACKEND_PATHS.cpu,
       models: MODELS,
       outputs: OUTPUTS,
+      chatHistory: CHAT_HISTORY,
+      transcriptions: TRANSCRIPTIONS,
+      ttsOutputs: TTS_OUTPUTS,
     };
   } else if (osPlatform === "darwin") {
     return {
@@ -2715,6 +2722,9 @@ function getSetupPaths() {
       macBackend: BACKEND_PATHS.mac,
       models: MODELS,
       outputs: OUTPUTS,
+      chatHistory: CHAT_HISTORY,
+      transcriptions: TRANSCRIPTIONS,
+      ttsOutputs: TTS_OUTPUTS,
     };
   } else {
     // Linux / WSL
@@ -2727,6 +2737,9 @@ function getSetupPaths() {
       linuxRocmBackend: BACKEND_PATHS.linuxRocm,
       models: MODELS,
       outputs: OUTPUTS,
+      chatHistory: CHAT_HISTORY,
+      transcriptions: TRANSCRIPTIONS,
+      ttsOutputs: TTS_OUTPUTS,
     };
   }
 }
@@ -2739,6 +2752,9 @@ async function getHealth() {
     getPathInfo("Frontend build", paths.distIndex),
     getDirInfo("Models folder", paths.models),
     getDirInfo("Outputs folder", paths.outputs),
+    getDirInfo("Chat history folder", paths.chatHistory),
+    getDirInfo("Transcriptions folder", paths.transcriptions),
+    getDirInfo("TTS outputs folder", paths.ttsOutputs),
   ];
 
   if (osPlatform === "win32") {
@@ -2811,6 +2827,16 @@ async function getHealth() {
       totalBytes: getPathSize(OUTPUTS),
       totalSize: formatBytes(getPathSize(OUTPUTS)),
     },
+    chat: {
+      count: fs.existsSync(CHAT_HISTORY) ? fs.readdirSync(CHAT_HISTORY).filter((file) => file.toLowerCase().endsWith(".json")).length : 0,
+      totalBytes: getPathSize(CHAT_HISTORY),
+      totalSize: formatBytes(getPathSize(CHAT_HISTORY)),
+    },
+    speech: {
+      transcriptions: fs.existsSync(TRANSCRIPTIONS) ? fs.readdirSync(TRANSCRIPTIONS).filter((file) => file.toLowerCase().endsWith(".json")).length : 0,
+      totalBytes: getPathSize(TRANSCRIPTIONS),
+      totalSize: formatBytes(getPathSize(TRANSCRIPTIONS)),
+    },
     tts: {
       models: fs.existsSync(TTS_MODELS) ? fs.readdirSync(TTS_MODELS).filter((file) => file.toLowerCase().endsWith(".json")).length : 0,
       outputs: fs.existsSync(TTS_OUTPUTS) ? fs.readdirSync(TTS_OUTPUTS).filter((file) => file.toLowerCase().endsWith(".json")).length : 0,
@@ -2827,6 +2853,8 @@ function addCleanupCandidate(candidates, id, targetPath, reason, options = {}) {
   if (!options.allowUserData && (
     pathInside(targetPath, MODELS) ||
     pathInside(targetPath, OUTPUTS) ||
+    pathInside(targetPath, CHAT_HISTORY) ||
+    pathInside(targetPath, TRANSCRIPTIONS) ||
     pathInside(targetPath, TTS_MODELS) ||
     pathInside(targetPath, TTS_OUTPUTS)
   )) return;
@@ -5402,6 +5430,101 @@ function safeOutputName(value) {
     .slice(0, 120);
 }
 
+function sanitizeChatMessageForStorage(message) {
+  if (!message || typeof message !== "object") return null;
+  const role = String(message.role || "").trim();
+  if (!["system", "user", "assistant"].includes(role)) return null;
+  let content = message.content;
+  if (Array.isArray(content)) {
+    content = content.map((item) => {
+      if (!item || typeof item !== "object") return item;
+      if (item.type === "image_url") {
+        return { type: "text", text: "[Attached image omitted from saved chat history]" };
+      }
+      return item;
+    });
+  } else if (typeof content !== "string") {
+    content = content === undefined || content === null ? "" : String(content);
+  }
+  return {
+    ...message,
+    role,
+    content,
+  };
+}
+
+function sanitizeChatConversationForStorage(conversation = {}) {
+  const now = Date.now();
+  const id = safeOutputName(conversation.id || `chat_${now}`) || `chat_${now}`;
+  const messages = Array.isArray(conversation.messages)
+    ? conversation.messages.map(sanitizeChatMessageForStorage).filter(Boolean)
+    : [];
+  const timestamp = Number(conversation.timestamp) || now;
+  return {
+    id,
+    title: String(conversation.title || "Chat Session").slice(0, 160),
+    model: String(conversation.model || ""),
+    messages,
+    timestamp,
+    createdAt: conversation.createdAt || new Date(timestamp).toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function getChatConversationPath(id) {
+  const safeId = safeOutputName(id);
+  if (!safeId) throw new Error("A chat id is required.");
+  const filePath = path.join(CHAT_HISTORY, `${safeId}.json`);
+  if (!pathInside(filePath, CHAT_HISTORY)) {
+    throw new Error("Invalid chat id.");
+  }
+  return filePath;
+}
+
+function saveChatConversation(conversation = {}) {
+  const saved = sanitizeChatConversationForStorage(conversation);
+  const filePath = getChatConversationPath(saved.id);
+  fs.writeFileSync(filePath, JSON.stringify(saved, null, 2), "utf8");
+  return saved;
+}
+
+function listChatConversations() {
+  try {
+    return fs.readdirSync(CHAT_HISTORY)
+      .filter((file) => file.toLowerCase().endsWith(".json"))
+      .map((file) => {
+        try {
+          const filePath = path.join(CHAT_HISTORY, file);
+          if (!pathInside(filePath, CHAT_HISTORY)) return null;
+          const conversation = JSON.parse(fs.readFileSync(filePath, "utf8"));
+          const stat = fs.statSync(filePath);
+          return {
+            ...conversation,
+            filename: file,
+            modifiedAt: stat.mtime.toISOString(),
+            sizeBytes: stat.size,
+            size: formatBytes(stat.size),
+          };
+        } catch (_) {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
+  } catch (_) {
+    return [];
+  }
+}
+
+function deleteChatConversation(id) {
+  const filePath = getChatConversationPath(id);
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+    return true;
+  }
+  return false;
+}
+
 function saveGeneratedOutput(imageDataUrl, metadata = {}) {
   const match = String(imageDataUrl || "").match(/^data:(image\/(?:png|jpeg|jpg|webp));base64,(.+)$/);
   if (!match) {
@@ -5697,6 +5820,34 @@ const server = http.createServer(async (req, res) => {
       preferredBackend: body.preferredBackend ? String(body.preferredBackend).toLowerCase() : undefined,
     });
     return json(res, 200, { ok: true, model: filename, settings: updated });
+  }
+
+  if (req.url === "/api/llm/conversations" && req.method === "GET") {
+    return json(res, 200, { ok: true, conversations: listChatConversations() });
+  }
+
+  if (req.url === "/api/llm/save-conversation" && req.method === "POST") {
+    const body = await readJsonBody(req, res);
+    if (!body) return;
+    try {
+      const conversation = saveChatConversation(body.conversation || body);
+      return json(res, 200, { ok: true, conversation });
+    } catch (err) {
+      console.error("  [api] Failed to save chat conversation:", err);
+      return json(res, 500, { ok: false, error: err.message || String(err) });
+    }
+  }
+
+  if (req.url === "/api/llm/delete-conversation" && req.method === "POST") {
+    const body = await readJsonBody(req, res);
+    if (!body) return;
+    try {
+      const deleted = deleteChatConversation(body.id);
+      return json(res, 200, { ok: true, deleted });
+    } catch (err) {
+      console.error("  [api] Failed to delete chat conversation:", err);
+      return json(res, 500, { ok: false, error: err.message || String(err) });
+    }
   }
 
   if (req.url === "/api/llm/models" && req.method === "GET") {

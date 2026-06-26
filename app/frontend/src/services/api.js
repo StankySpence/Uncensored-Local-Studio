@@ -365,6 +365,31 @@ export async function listLlmModels() {
   return (data.models || []).map(normalizeModel);
 }
 
+export async function listLlmConversations() {
+  const res = await fetch("/api/llm/conversations");
+  const data = await readJsonResponse(res, "The local server returned invalid chat history.");
+  return data.conversations || [];
+}
+
+export async function saveLlmConversation(conversation) {
+  const res = await fetch("/api/llm/save-conversation", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conversation }),
+  });
+  const data = await readJsonResponse(res, "The local server returned an invalid chat save response.");
+  return data.conversation;
+}
+
+export async function deleteLlmConversation(id) {
+  const res = await fetch("/api/llm/delete-conversation", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id }),
+  });
+  return await readJsonResponse(res, "The local server returned an invalid chat delete response.");
+}
+
 export async function searchHuggingFaceModels(query = "", filters = [], page = 1) {
   const params = new URLSearchParams();
   if (query.trim()) params.set("query", query.trim());

@@ -17,6 +17,7 @@ app/config/
 app/cache/
 app/dist/
 app/outputs/
+app/chat-history/
 app/transcriptions/
 app/tts-outputs/
 app/tts-cache/
